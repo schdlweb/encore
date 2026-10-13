@@ -1,0 +1,6 @@
+build
+build.nosync/
+build.log
+.build/
+.DS_Store
+build*.log

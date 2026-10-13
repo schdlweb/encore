@@ -1,0 +1,12 @@
+module CFFmpeg [system] {
+    header "/opt/homebrew/include/libavformat/avformat.h"
+    header "/opt/homebrew/include/libavcodec/avcodec.h"
+    header "/opt/homebrew/include/libswscale/swscale.h"
+    header "/opt/homebrew/include/libavutil/frame.h"
+    header "/opt/homebrew/include/libavutil/hwcontext.h"
+    link "avformat"
+    link "avcodec"
+    link "swscale"
+    link "avutil"
+    export *
+}
