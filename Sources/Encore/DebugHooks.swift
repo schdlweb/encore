@@ -264,6 +264,9 @@ enum DebugHooks {
             print("[update] installing over \(Bundle.main.bundleURL.path)"); fflush(stdout)
             await app.updater.install(.init(version: "9.9.9", notes: "", zip: URL(string: "http://127.0.0.1:8799/Encore.zip")!))
             print("[update] state=\(app.updater.state)"); fflush(stdout)
+        case "updatecheck":
+            await app.updater.check(userInitiated: true)
+            print("[update] current=\(app.updater.currentVersion) state=\(app.updater.state)"); fflush(stdout)
         case "pausetest":
             // Toggles pause a few times, timing the call itself and until the UI state flips.
             for _ in 0..<4 {

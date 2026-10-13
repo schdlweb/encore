@@ -20,6 +20,9 @@ struct PlayerView: View {
     @State private var pointerOnBar = false
     @State private var lastActivity = Date()
     @State private var seekFlashVisible = false
+    @State private var xray: XRayService.Info?
+    @State private var xrayPinned = false
+    @State private var songToast: XRayService.Song?
     @State private var unloggedWatchTime: Double = 0
     @State private var markedWatched = false
     @State private var skipPromptFresh = false
@@ -97,7 +100,8 @@ struct PlayerView: View {
         .focusable()
         .focusEffectDisabled()
         .focused($focused)
-        .onKeyPress(phases: .down) { press in handleKey(press) }
+        // Repeats too, so holding an arrow keeps skipping (other keys act once per press).
+        .onKeyPress(phases: [.down, .repeat]) { press in handleKey(press) }
         .onContinuousHover { _ in poke() }
         // No aspect-ratio lock on the window (macOS applies it to full screen too, which
         // left the video stretched to the top and bottom edges only). Instead, when a
@@ -203,6 +207,7 @@ struct PlayerView: View {
         .allowsHitTesting(skipPromptFresh || controlsVisible)
         .animation(.easeInOut(duration: 0.4), value: skipPromptFresh)
         .onChange(of: activeSegment?.id) { _, id in
+            if id != nil { showSongToast() }
             skipPromptTask?.cancel()
             guard id != nil else { skipPromptFresh = false; return }
             skipPromptFresh = true
@@ -213,6 +218,35 @@ struct PlayerView: View {
         }
         .animation(.easeInOut(duration: 0.25), value: controlsVisible)
         .animation(.easeInOut(duration: 0.2), value: activeSegment?.id)
+
+        // X-Ray: who's in it and the music, shown while paused (or pinned with X).
+        if let xray, !xray.isEmpty, app.settings.xrayEnabled, xrayPinned || (p.paused && p.fileLoaded) {
+            XRayPanel(info: xray, nowPlaying: currentSong)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .padding(.top, inWindow ? 130 : 100)
+                .padding(.leading, 20)
+                .padding(.bottom, 130)
+                .transition(.move(edge: .leading).combined(with: .opacity))
+        }
+
+        // "♪ Song — Artist" for a few seconds when an opening or ending starts.
+        if let song = songToast {
+            HStack(spacing: 8) {
+                Image(systemName: "music.note")
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(song.kind == .opening ? "Opening" : song.kind == .ending ? "Ending" : "Now Playing")
+                        .font(.system(size: 10, weight: .semibold)).foregroundStyle(.white.opacity(0.65))
+                    Text(song.byline).font(.system(size: 13, weight: .semibold)).lineLimit(1)
+                }
+            }
+            .padding(.horizontal, 14).padding(.vertical, 9)
+            .glass(cornerRadius: 12, tint: .black.opacity(0.4))
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+            .padding(.top, inWindow ? 90 : 70)
+            .padding(.trailing, 24)
+            .allowsHitTesting(false)
+            .transition(.opacity.combined(with: .move(edge: .trailing)))
+        }
 
         if dolbyVisionWarning {
             HStack(spacing: 12) {
@@ -501,8 +535,37 @@ struct PlayerView: View {
 
     // MARK: Lifecycle
 
+    /// The opening or ending playing right now, if the credits/intro times say so.
+    private var currentSong: XRayService.Song? {
+        guard let seg = activeSegment, let songs = xray?.songs else { return nil }
+        switch seg.kind {
+        case .intro: return songs.first { $0.kind == .opening }
+        case .outro: return songs.first { $0.kind == .ending }
+        default: return nil
+        }
+    }
+
+    private func loadXRay() {
+        guard app.settings.xrayEnabled || app.settings.songPopups else { return }
+        let meta = request.meta, video = request.video
+        Task {
+            let info = await XRayService.info(meta: meta, video: video)
+            withAnimation(.easeOut(duration: 0.25)) { xray = info }
+        }
+    }
+
+    private func showSongToast() {
+        guard app.settings.songPopups, let song = currentSong else { return }
+        withAnimation(.easeOut(duration: 0.3)) { songToast = song }
+        Task {
+            try? await Task.sleep(for: .seconds(6))
+            withAnimation(.easeIn(duration: 0.4)) { if songToast == song { songToast = nil } }
+        }
+    }
+
     private func start() {
         focused = true
+        loadXRay()
         let p = MPVController(settings: app.settings)
         player = p
         let skip = Double(app.settings.skipInterval)
@@ -944,6 +1007,8 @@ struct PlayerView: View {
 
     private func handleKey(_ press: KeyPress) -> KeyPress.Result {
         guard let p = player else { return .ignored }
+        let arrows: [KeyEquivalent] = [.leftArrow, .rightArrow, .upArrow, .downArrow]
+        if press.phase == .repeat, !arrows.contains(press.key) { return .handled }
         let skip = Double(app.settings.skipInterval)
         // Skips show only the timeline (unless the playbar is already up); other keys bring up the playbar.
         if press.key == .leftArrow || press.key == .rightArrow {
@@ -963,6 +1028,7 @@ struct PlayerView: View {
             case "f": toggleFullScreen()
             case "m": p.toggleMute()
             case "i": withAnimation { showInfo.toggle() }
+            case "x": withAnimation(.easeOut(duration: 0.25)) { xrayPinned.toggle() }
             case "k": p.togglePause()
             case "n": if let n = nextVideo { playNext(n) }
             default: return .ignored
@@ -1339,5 +1405,88 @@ private struct SubtitleMenu: View, Equatable {
             Image(systemName: "captions.bubble")
         }
         .playerMenuStyle(help: "Subtitles")
+    }
+}
+
+/// The X-Ray sidebar: the song playing now, this episode's music, and its people.
+struct XRayPanel: View {
+    let info: XRayService.Info
+    let nowPlaying: XRayService.Song?
+
+    var body: some View {
+        ScrollView(.vertical, showsIndicators: false) {
+            VStack(alignment: .leading, spacing: 18) {
+                HStack(spacing: 6) {
+                    Image(systemName: "sparkle.magnifyingglass")
+                    Text("X-Ray")
+                }
+                .font(.system(size: 15, weight: .bold))
+
+                if let song = nowPlaying {
+                    section("Now Playing") {
+                        songRow(song, highlighted: true)
+                    }
+                }
+                if !info.songs.isEmpty {
+                    section("Music") {
+                        ForEach(info.songs) { songRow($0, highlighted: false) }
+                    }
+                }
+                if !info.people.isEmpty {
+                    section(info.peopleTitle) {
+                        ForEach(info.people.prefix(24)) { person in
+                            HStack(spacing: 10) {
+                                RemoteImage(url: person.photo, maxPixel: 120)
+                                    .frame(width: 40, height: 40)
+                                    .clipShape(Circle())
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(person.name).font(.system(size: 13, weight: .semibold)).lineLimit(1)
+                                    if let role = person.role, !role.isEmpty {
+                                        Text(role).font(.system(size: 11)).foregroundStyle(.white.opacity(0.6)).lineLimit(1)
+                                    }
+                                }
+                                Spacer(minLength: 0)
+                                if person.isGuest {
+                                    Text("Guest").font(.system(size: 9, weight: .bold)).foregroundStyle(.white.opacity(0.7))
+                                        .padding(.horizontal, 5).padding(.vertical, 2)
+                                        .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(.white.opacity(0.35), lineWidth: 0.75))
+                                }
+                            }
+                        }
+                    }
+                }
+                Text("Press X to keep this open while playing")
+                    .font(.system(size: 10)).foregroundStyle(.white.opacity(0.45))
+            }
+            .padding(16)
+        }
+        .frame(width: 300)
+        .frame(maxHeight: 520)
+        .fixedSize(horizontal: false, vertical: true)
+        .glass(cornerRadius: 16, tint: .black.opacity(0.5))
+        .foregroundStyle(.white)
+    }
+
+    private func section<Content: View>(_ title: String, @ViewBuilder _ content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title.uppercased()).font(.system(size: 10, weight: .bold)).foregroundStyle(.white.opacity(0.5))
+            content()
+        }
+    }
+
+    private func songRow(_ song: XRayService.Song, highlighted: Bool) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: highlighted ? "waveform" : "music.note")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(highlighted ? Theme.accent : .white.opacity(0.6))
+                .frame(width: 18)
+                .symbolEffect(.variableColor.iterative, isActive: highlighted)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(song.title).font(.system(size: 13, weight: .semibold)).lineLimit(2)
+                Text(([song.kind.rawValue + (song.kind == .insert ? "" : " \(song.number)")] + [song.artists.joined(separator: ", ")])
+                        .filter { !$0.isEmpty }.joined(separator: " · "))
+                    .font(.system(size: 11)).foregroundStyle(.white.opacity(0.6)).lineLimit(2)
+            }
+        }
     }
 }

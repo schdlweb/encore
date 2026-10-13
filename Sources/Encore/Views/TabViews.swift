@@ -284,6 +284,9 @@ struct SettingsView: View {
                         ForEach(StreamBuffer.allCases) { Text($0.label).tag($0) }
                     }
                     note("Disk downloads far ahead of where you are, so skipping forward is instant and a shaky connection won't interrupt playback. It uses more bandwidth and temporary disk space, which is freed when the video closes.")
+                    Toggle("X-Ray when paused (cast, characters, music)", isOn: $s.xrayEnabled)
+                    Toggle("Song pop-ups when an opening or ending starts", isOn: $s.songPopups)
+                    note("Songs come from AnimeThemes (anime openings and endings), people from AniList and TVmaze. Press X in the player to keep X-Ray open while watching.")
                     Toggle("Thumbnails while scrubbing", isOn: $s.scrubPreviews)
                     note("Opens a second, silent connection to the stream to grab frames when you hover the timeline.")
                     Picker("Skip interval", selection: $s.skipInterval) {
