@@ -309,6 +309,25 @@ final class WatchStore {
         save()
     }
 
+    /// A video finished in another app (AIOStreams' Jellyfin, Simkl): checked off here, and
+    /// if it's the newest thing watched for that title, the title moves on past it.
+    func applyRemoteWatched(title: SavedTitle, videoId: String, season: Int?, episode: Int?,
+                            episodeTitle: String?, thumbnail: String?, at: Date) {
+        disk.progress[videoId] = 1
+        if (disk.entries[title.id]?.updatedAt ?? .distantPast) < at {
+            disk.entries[title.id] = WatchEntry(title: title, videoId: videoId, season: season, episode: episode,
+                                                episodeTitle: episodeTitle, episodeThumbnail: thumbnail,
+                                                position: 1, duration: 1, updatedAt: at)
+        }
+        if !stats.history.contains(where: { $0.videoId == videoId }) {
+            stats.history.append(HistoryItem(title: title, videoId: videoId, season: season, episode: episode,
+                                             episodeTitle: episodeTitle, thumbnail: thumbnail, watchedAt: at))
+            stats.history.sort { $0.watchedAt > $1.watchedAt }
+            saveStats()
+        }
+        save()
+    }
+
     func removeFromContinue(_ metaId: String) {
         disk.entries[metaId] = nil
         save()

@@ -125,6 +125,118 @@ final class SimklSync {
         return ["movie": ["ids": ["imdb": imdb]]]
     }
 
+    // MARK: Pulling
+
+    private func get(_ path: String) async -> Data? {
+        guard let token, let url = URL(string: "https://api.simkl.com" + path) else { return nil }
+        var req = URLRequest(url: url)
+        req.timeoutInterval = 20
+        req.setValue(clientId, forHTTPHeaderField: "simkl-api-key")
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        guard let (data, resp) = try? await URLSession.shared.data(for: req) else { return nil }
+        if (resp as? HTTPURLResponse)?.statusCode == 401 {
+            Keychain.set(nil, for: "simkl.token")
+            status = .failed("Simkl signed Encore out; sign in again.")
+            return nil
+        }
+        return data
+    }
+
+    private struct Ids: Decodable { var imdb: String? }
+    private struct Titled: Decodable { var title: String?; var ids: Ids? }
+    private struct Playback: Decodable {
+        struct Ep: Decodable { var season: Int?; var episode: Int?; var number: Int?; var title: String? }
+        var progress: Double?
+        var paused_at: String?
+        var type: String?
+        var movie: Titled?
+        var show: Titled?
+        var episode: Ep?
+    }
+    private struct AllItems: Decodable {
+        struct Show: Decodable {
+            struct Season: Decodable {
+                struct Ep: Decodable { var number: Int?; var watched_at: String? }
+                var number: Int?
+                var episodes: [Ep]?
+            }
+            var show: Titled?
+            var seasons: [Season]?
+        }
+        struct Movie: Decodable { var movie: Titled?; var last_watched_at: String?; var status: String? }
+        var shows: [Show]?
+        var anime: [Show]?
+        var movies: [Movie]?
+    }
+
+    /// Simkl's resume points and what was watched since the last pull (the last 30 days the
+    /// first time). Newer than what's here wins, like the AIOStreams sync.
+    func pull(watch: WatchStore, metaFor: (String, String) async -> Meta?) async {
+        guard active else { return }
+        let iso = ISO8601DateFormatter()
+        func date(_ s: String?) -> Date? {
+            guard let s else { return nil }
+            if let d = iso.date(from: s) { return d }
+            let f = ISO8601DateFormatter(); f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            return f.date(from: s)
+        }
+        var metas: [String: Meta] = [:]
+        func meta(_ type: String, _ imdb: String) async -> Meta? {
+            if let m = metas[imdb] { return m }
+            let m = await metaFor(type, imdb)
+            metas[imdb] = m
+            return m
+        }
+
+        // Resume points (a percentage; turned into seconds with the episode's length).
+        if let data = await get("/sync/playback"), let items = try? JSONDecoder().decode([Playback].self, from: data) {
+            for p in items {
+                guard let pct = p.progress, pct > 1, pct < 95, let at = date(p.paused_at) else { continue }
+                let isEpisode = p.type == "episode"
+                guard let imdb = (isEpisode ? p.show : p.movie)?.ids?.imdb else { continue }
+                if (watch.entry(for: imdb)?.updatedAt ?? .distantPast) >= at { continue }
+                guard let m = await meta(isEpisode ? "series" : "movie", imdb) else { continue }
+                let s = p.episode?.season, e = p.episode?.episode ?? p.episode?.number
+                let videoId = isEpisode ? "\(imdb):\(s ?? 1):\(e ?? 1)" : imdb
+                let video = m.videos.first { $0.id == videoId }
+                let minutes = Double(m.runtime.flatMap { Int($0.filter(\.isNumber)) } ?? (isEpisode ? 24 : 110))
+                watch.applyRemoteProgress(title: SavedTitle(m), videoId: videoId, season: s, episode: e,
+                                          episodeTitle: video?.title ?? p.episode?.title, thumbnail: video?.thumbnail,
+                                          position: pct / 100 * minutes * 60, duration: minutes * 60, at: at)
+            }
+        }
+
+        // Watched since the last pull.
+        let since = UserDefaults.standard.object(forKey: "simklLastPull") as? Date ?? Date().addingTimeInterval(-30 * 86400)
+        let stamp = ISO8601DateFormatter().string(from: since)
+        guard let data = await get("/sync/all-items/?episode_watched_at=yes&date_from=\(stamp)"),
+              let all = try? JSONDecoder().decode(AllItems.self, from: data) else { return }
+        for show in (all.shows ?? []) + (all.anime ?? []) {
+            guard let imdb = show.show?.ids?.imdb else { continue }
+            var watched: [(Int, Int, Date)] = []
+            for season in show.seasons ?? [] {
+                for ep in season.episodes ?? [] {
+                    if let s = season.number, let n = ep.number, let at = date(ep.watched_at), at > since { watched.append((s, n, at)) }
+                }
+            }
+            guard !watched.isEmpty, let m = await meta("series", imdb) else { continue }
+            for (s, n, at) in watched.sorted(by: { $0.2 < $1.2 }) {
+                let videoId = "\(imdb):\(s):\(n)"
+                let video = m.videos.first { $0.id == videoId }
+                watch.applyRemoteWatched(title: SavedTitle(m), videoId: videoId, season: s, episode: n,
+                                         episodeTitle: video?.title, thumbnail: video?.thumbnail, at: at)
+            }
+        }
+        for movie in all.movies ?? [] {
+            guard movie.status == nil || movie.status == "completed",
+                  let imdb = movie.movie?.ids?.imdb, let at = date(movie.last_watched_at), at > since,
+                  let m = await meta("movie", imdb) else { continue }
+            watch.applyRemoteWatched(title: SavedTitle(m), videoId: imdb, season: nil, episode: nil,
+                                     episodeTitle: nil, thumbnail: nil, at: at)
+        }
+        UserDefaults.standard.set(Date(), forKey: "simklLastPull")
+    }
+
     // MARK: Scrobbling
 
     func scrobble(_ action: String, meta: Meta, video: Video?, position: Double, duration: Double) {

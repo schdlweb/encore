@@ -191,6 +191,7 @@ final class AppState {
     func pullSync() async {
         guard client != nil, ProcessInfo.processInfo.environment["ENCORE_ROUTE"] == nil else { return }
         await jellyfin.pull { [weak self] type, id in await self?.fullMeta(type: type, id: id) }
+        await simkl.pull(watch: watch) { [weak self] type, id in await self?.fullMeta(type: type, id: id) }
     }
 
     func setWatched(_ meta: Meta, videos: [Video], watched: Bool) {

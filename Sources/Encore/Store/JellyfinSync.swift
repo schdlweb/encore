@@ -86,7 +86,6 @@ final class JellyfinSync {
             Keychain.set(auth.AccessToken, for: "jellyfin.token")
             UserDefaults.standard.set(auth.User.Id, forKey: "jellyfinUserId")
             status = .signedIn(auth.User.Name ?? profile)
-            await pull()
         } catch {
             status = .failed(error.localizedDescription)
         }
@@ -261,6 +260,49 @@ final class JellyfinSync {
                 at: when
             )
         }
+        await pullHistory(metaFor: metaFor)
         lastPull = .now
+    }
+
+    private struct HistoryPage: Decodable {
+        struct Entry: Decodable {
+            var played: Bool?
+            var positionMs: Double?
+            var durationMs: Double?
+            var lastPlayedAt: Double?
+            var item: Item?
+        }
+        var items: [Entry]
+    }
+
+    /// The profile's recent plays (newest 150), from AIOStreams' history: finished ones are
+    /// checked off here, unfinished newer ones become resume points.
+    private func pullHistory(metaFor: ((String, String) async -> Meta?)?) async {
+        guard let userId,
+              let data = await send("GET", "AIOStreams/History", query: ["userId": userId, "limit": "150"]),
+              let page = try? JSONDecoder().decode(HistoryPage.self, from: data) else { return }
+        var metas: [String: Meta] = [:]
+        // Oldest first, so the newest play of each title is the one that sticks.
+        for entry in page.items.reversed() {
+            guard let item = entry.item, let ids = Self.decode(item.Id) else { continue }
+            let at = Date(timeIntervalSince1970: (entry.lastPlayedAt ?? 0) / 1000)
+            let isEpisode = ids.episode != nil
+            let videoId = isEpisode ? "\(ids.imdb):\(ids.season ?? 1):\(ids.episode!)" : ids.imdb
+            if entry.played != true, (watch.entry(for: ids.imdb)?.updatedAt ?? .distantPast) >= at { continue }
+            if entry.played == true, watch.progress(videoId: videoId) >= 1,
+               (watch.entry(for: ids.imdb)?.updatedAt ?? .distantPast) >= at { continue }
+            var meta = metas[ids.imdb]
+            if meta == nil { meta = await metaFor?(isEpisode ? "series" : "movie", ids.imdb); metas[ids.imdb] = meta }
+            guard let meta else { continue }
+            let video = meta.videos.first { $0.id == videoId }
+            if entry.played == true {
+                watch.applyRemoteWatched(title: SavedTitle(meta), videoId: videoId, season: ids.season, episode: ids.episode,
+                                         episodeTitle: video?.title ?? item.Name, thumbnail: video?.thumbnail, at: at)
+            } else if let pos = entry.positionMs, pos > 30_000 {
+                watch.applyRemoteProgress(title: SavedTitle(meta), videoId: videoId, season: ids.season, episode: ids.episode,
+                                          episodeTitle: video?.title ?? item.Name, thumbnail: video?.thumbnail,
+                                          position: pos / 1000, duration: (entry.durationMs ?? 0) / 1000, at: at)
+            }
+        }
     }
 }

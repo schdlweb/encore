@@ -513,9 +513,13 @@ private struct JellyfinSignIn: View {
                         Text(msg).foregroundStyle(.red).font(.system(size: 12))
                     }
                 }
-                Text("The password is only used to sign in; Encore keeps the sign-in token in your Keychain.")
+                Text("The password is only used to sign in; Encore keeps just the sign-in token.")
                     .font(.system(size: 11)).foregroundStyle(Theme.textTertiary)
             }
+        }
+        // First sync right after signing in.
+        .onChange(of: app.jellyfin.status) { _, new in
+            if case .signedIn = new { Task { await app.pullSync() } }
         }
     }
 }
@@ -552,6 +556,9 @@ private struct SimklSignIn: View {
                 Text("Opens simkl.com to approve Encore; tracking starts as soon as you do.")
                     .font(.system(size: 11)).foregroundStyle(Theme.textTertiary)
             }
+        }
+        .onChange(of: app.simkl.status) { _, new in
+            if new == .signedIn { Task { await app.pullSync() } }
         }
     }
 }
