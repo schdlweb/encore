@@ -11,7 +11,7 @@ import Observation
 @Observable
 @MainActor
 final class JellyfinSync {
-    enum Status: Equatable { case off, signedOut, signingIn, quickConnect(String), signedIn(String), failed(String) }
+    enum Status: Equatable { case off, signedOut, signingIn, signedIn(String), failed(String) }
 
     private(set) var status: Status = .off
     private(set) var lastPull: Date?
@@ -98,69 +98,7 @@ final class JellyfinSync {
         }
     }
 
-    private var quickConnectTask: Task<Void, Never>?
     private var reauthenticating = false
-
-    /// Passwordless: shows a six-digit code to approve on the AIOStreams configure page
-    /// (Connect tab, where the profile is chosen) or in another signed-in app.
-    func signInWithQuickConnect() {
-        guard let server else { status = .failed("Connect an AIOStreams addon first."); return }
-        quickConnectTask?.cancel()
-        Keychain.set(nil, for: "jellyfin.token")
-        let header = authHeader
-        quickConnectTask = Task {
-            struct QC: Decodable { var Secret: String; var Code: String; var Authenticated: Bool? }
-            func request(_ method: String, _ path: String, query: [String: String] = [:], body: [String: Any]? = nil) async -> Data? {
-                var comps = URLComponents(url: server.base.appendingPathComponent(path), resolvingAgainstBaseURL: false)!
-                if !query.isEmpty { comps.queryItems = query.map { URLQueryItem(name: $0.key, value: $0.value) } }
-                var req = URLRequest(url: comps.url!)
-                req.httpMethod = method
-                req.setValue(header, forHTTPHeaderField: "Authorization")
-                if let body {
-                    req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-                    req.httpBody = try? JSONSerialization.data(withJSONObject: body)
-                }
-                return try? await URLSession.shared.data(for: req).0
-            }
-            guard let data = await request("POST", "QuickConnect/Initiate"),
-                  let qc = try? JSONDecoder().decode(QC.self, from: data) else {
-                status = .failed("AIOStreams didn't start Quick Connect.")
-                return
-            }
-            status = .quickConnect(qc.Code)
-            let deadline = Date().addingTimeInterval(600)
-            while !Task.isCancelled, Date() < deadline {
-                try? await Task.sleep(for: .seconds(3))
-                guard let d = await request("GET", "QuickConnect/Connect", query: ["Secret": qc.Secret]),
-                      let state = try? JSONDecoder().decode(QC.self, from: d) else { continue }
-                guard state.Authenticated == true else { continue }
-                struct Auth: Decodable { struct U: Decodable { var Id: String; var Name: String? }; var AccessToken: String; var User: U }
-                guard let a = await request("POST", "Users/AuthenticateWithQuickConnect", body: ["Secret": qc.Secret]),
-                      let auth = try? JSONDecoder().decode(Auth.self, from: a) else {
-                    status = .failed("Approved, but signing in failed; try again.")
-                    return
-                }
-                Keychain.set(auth.AccessToken, for: "jellyfin.token")
-                UserDefaults.standard.set(auth.User.Id, forKey: "jellyfinUserId")
-                if let name = auth.User.Name { settings.jellyfinProfile = name }
-                status = .signedIn(auth.User.Name ?? settings.jellyfinProfile)
-                return
-            }
-            if !Task.isCancelled { status = .failed("The code expired; try again.") }
-        }
-    }
-
-    /// The AIOStreams configure page (where Quick Connect codes are approved).
-    var configurePage: URL? {
-        let raw = settings.manifestURL
-        guard raw.hasSuffix("manifest.json") else { return nil }
-        return URL(string: String(raw.dropLast("manifest.json".count)) + "configure")
-    }
-
-    func cancelQuickConnect() {
-        quickConnectTask?.cancel()
-        refreshStatus()
-    }
 
     func signOut() {
         Keychain.set(nil, for: "jellyfin.token")

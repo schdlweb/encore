@@ -276,15 +276,6 @@ enum DebugHooks {
             let b = JellyfinSync.itemId(imdb: "tt9522300", type: "series", season: 1, episode: 3) ?? "-"
             let c = JellyfinSync.itemId(imdb: "tt0816692", type: "movie") ?? "-"
             print("[jf] \(a) \(b) \(c) decode=\(String(describing: JellyfinSync.decode(b)))"); fflush(stdout)
-        case "qctest":
-            app.settings.jellyfinSync = true
-            app.jellyfin.refreshStatus()
-            app.jellyfin.signInWithQuickConnect()
-            try? await Task.sleep(for: .seconds(4))
-            if case .quickConnect(let code) = app.jellyfin.status { print("[qc] code shown, \(code.count) digits") } else { print("[qc] status=\(app.jellyfin.status)") }
-            app.jellyfin.cancelQuickConnect()
-            app.settings.jellyfinSync = false
-            fflush(stdout)
         case "pausetest":
             // Toggles pause a few times, timing the call itself and until the UI state flips.
             for _ in 0..<4 {
