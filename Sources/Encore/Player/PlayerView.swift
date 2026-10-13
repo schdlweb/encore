@@ -1286,7 +1286,6 @@ struct PlayerWindowConfigurator: NSViewRepresentable {
 // panel they would be rebuilt with every time update during playback, and rebuilding an
 // open menu shifts its highlight away from the cursor and closes its submenus.
 
-private func check(_ on: Bool) -> String { on ? "✓  " : "     " }
 
 private extension View {
     /// The floating glass panel the playbar (and the arrow-key timeline) sit in.
@@ -1306,13 +1305,6 @@ private extension View {
             .frame(maxWidth: .infinity)
     }
 
-    func playerMenuStyle(help: String) -> some View {
-        menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .font(.system(size: 13, weight: .semibold))
-            .help(help)
-    }
 }
 
 /// Speed, source and media info live behind one gear, as in Infuse.
@@ -1330,27 +1322,25 @@ private struct GearMenu: View, Equatable {
     }
 
     var body: some View {
-        Menu {
-            Menu("Speed (\(String(format: "%gx", speed)))") {
-                ForEach([0.5, 0.75, 1, 1.25, 1.5, 2], id: \.self) { s in
-                    Button(check(abs(speed - s) < 0.01) + (s == 1 ? "Normal" : String(format: "%gx", s))) { setSpeed(s) }
-                }
+        NativeMenuButton(icon: "gearshape.fill", help: "Speed, source, media info", entries: entries)
+            .onAppear {
+                if ProcessInfo.processInfo.environment["ENCORE_DUMP_MENUS"] != nil { print("[menu]\n" + NativeMenu.describe(entries())); fflush(stdout) }
             }
-            if sources.count > 1 {
-                Menu("Source") {
-                    ForEach(sources.prefix(25)) { s in
-                        Button(check(s.url == current.url) + s.headline.replacingOccurrences(of: "\n", with: " ")) {
-                            switchTo(s)
-                        }
-                    }
-                }
-            }
-            Divider()
-            Button(showInfo ? "Hide Media Info" : "Media Info") { toggleInfo() }
-        } label: {
-            Image(systemName: "gearshape.fill")
+    }
+
+    private func entries() -> [MenuEntry] {
+        var entries: [MenuEntry] = [
+            .submenu("Speed (\(String(format: "%gx", speed)))", [0.5, 0.75, 1, 1.25, 1.5, 2].map { s in
+                .item(s == 1 ? "Normal" : String(format: "%gx", s), checked: abs(speed - s) < 0.01) { setSpeed(s) }
+            }),
+        ]
+        if sources.count > 1 {
+            entries.append(.submenu("Source", sources.prefix(25).map { s in
+                .item(String(s.oneLine.prefix(90)), checked: s.url == current.url) { switchTo(s) }
+            }))
         }
-        .playerMenuStyle(help: "Speed, source, media info")
+        entries += [.separator, .item(showInfo ? "Hide Media Info" : "Media Info") { toggleInfo() }]
+        return entries
     }
 }
 
@@ -1363,23 +1353,16 @@ private struct AudioMenu: View, Equatable {
     static func == (a: Self, b: Self) -> Bool { a.tracks == b.tracks && a.selected == b.selected }
 
     var body: some View {
-        Menu {
-            Section("Audio") {
-                ForEach(tracks) { t in
-                    Button { select(t.id) } label: {
-                        Text(check(selected == t.id) + t.label + (t.detail.isEmpty ? "" : "  —  \(t.detail)"))
-                    }
+        NativeMenuButton(icon: "waveform", help: "Audio tracks") {
+            [.header("Audio")]
+                + tracks.map { t in
+                    .item(t.label + (t.detail.isEmpty ? "" : "  —  \(t.detail)"), checked: selected == t.id) { select(t.id) }
                 }
-            }
-            Menu("Audio Offset") {
-                ForEach([-0.5, -0.25, -0.1, 0, 0.1, 0.25, 0.5], id: \.self) { d in
-                    Button(d == 0 ? "None" : String(format: "%+.2f s", d)) { setDelay(d) }
-                }
-            }
-        } label: {
-            Image(systemName: "waveform")
+                + [.separator,
+                   .submenu("Audio Offset", [-0.5, -0.25, -0.1, 0, 0.1, 0.25, 0.5].map { d in
+                       .item(d == 0 ? "None" : String(format: "%+.2f s", d)) { setDelay(d) }
+                   })]
         }
-        .playerMenuStyle(help: "Audio tracks")
     }
 }
 
@@ -1392,23 +1375,15 @@ private struct SubtitleMenu: View, Equatable {
     static func == (a: Self, b: Self) -> Bool { a.tracks == b.tracks && a.selected == b.selected }
 
     var body: some View {
-        Menu {
-            Section("Subtitles") {
-                Button(check(selected == nil) + "Off") { select(nil) }
-                ForEach(tracks) { t in
-                    Button { select(t.id) } label: {
-                        Text(check(selected == t.id) + t.label + (t.detail.isEmpty ? "" : "  —  \(t.detail)"))
-                    }
+        NativeMenuButton(icon: "captions.bubble", help: "Subtitles") {
+            [.header("Subtitles"), .item("Off", checked: selected == nil) { select(nil) }]
+                + tracks.map { t in
+                    .item(t.label + (t.detail.isEmpty ? "" : "  —  \(t.detail)"), checked: selected == t.id) { select(t.id) }
                 }
-            }
-            Menu("Subtitle Offset") {
-                ForEach([-2.0, -1, -0.5, 0, 0.5, 1, 2], id: \.self) { d in
-                    Button(d == 0 ? "None" : String(format: "%+.1f s", d)) { setDelay(d) }
-                }
-            }
-        } label: {
-            Image(systemName: "captions.bubble")
+                + [.separator,
+                   .submenu("Subtitle Offset", [-2.0, -1, -0.5, 0, 0.5, 1, 2].map { d in
+                       .item(d == 0 ? "None" : String(format: "%+.1f s", d)) { setDelay(d) }
+                   })]
         }
-        .playerMenuStyle(help: "Subtitles")
     }
 }

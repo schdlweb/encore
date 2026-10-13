@@ -14,7 +14,7 @@ struct PosterCard: View {
     private var height: CGFloat { width * 1.5 }
 
     private var badge: String? {
-        if let p = app.watch.entry(for: meta.id), p.position > 30, !p.isFinished { return "In Progress" }
+        if app.watch.inProgressIds.contains(meta.id) { return "In Progress" }
         let year = Calendar.current.component(.year, from: .now)
         if let y = meta.year.flatMap(Int.init), y >= year {
             return "New"
@@ -89,7 +89,7 @@ struct PosterCard: View {
         .buttonStyle(.plain)
         .onHover { if $0, !ScrollActivity.isScrolling { app.warmDetail(meta) } }
         .contextMenu {
-            Button(app.watch.isFavorite(meta.id) ? "Remove from Library" : "Add to Library") {
+            Button(app.watch.favoriteIds.contains(meta.id) ? "Remove from Library" : "Add to Library") {
                 app.watch.toggleFavorite(meta)
             }
             if let onNotInterested { Button("Not Interested") { onNotInterested() } }

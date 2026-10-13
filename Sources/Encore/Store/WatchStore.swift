@@ -99,6 +99,7 @@ final class WatchStore {
             stats = s
         }
         seedStatsIfNeeded()
+        refreshPosterState()
     }
 
     /// Watching from before stats existed: each title's last session, counted on the day it happened.
@@ -200,7 +201,21 @@ final class WatchStore {
     /// Scripted test runs (ENCORE_ROUTE) play things; they mustn't land in the real history.
     private let isTestRun = ProcessInfo.processInfo.environment["ENCORE_ROUTE"] != nil
 
+    /// Titles in progress, and in My List, as their own small properties: posters read
+    /// these, so saving progress every few seconds during playback doesn't redraw every
+    /// poster in the app (only an actual change to either set does).
+    private(set) var inProgressIds: Set<String> = []
+    private(set) var favoriteIds: Set<String> = []
+
+    private func refreshPosterState() {
+        let progress = Set(disk.entries.values.filter { $0.position > 30 && !$0.isFinished }.map(\.title.id))
+        if progress != inProgressIds { inProgressIds = progress }
+        let favs = Set(disk.favorites.map(\.id))
+        if favs != favoriteIds { favoriteIds = favs }
+    }
+
     private func save() {
+        refreshPosterState()
         guard !isTestRun else { return }
         let snapshot = disk
         let file = file

@@ -1,5 +1,7 @@
 import AppKit
 import CFFmpeg
+import ImageIO
+import UniformTypeIdentifiers
 
 /// Scrubbing previews, like Infuse's, read straight from the stream with FFmpeg: seek to
 /// the keyframe at or before the hovered time, decode that one frame, scale it down.
@@ -28,7 +30,10 @@ final class ThumbnailGenerator: @unchecked Sendable {
     private var busy = false
     private var pending: Double?
     /// Read from the main thread while the queue may be busy, so it has its own lock.
-    private var cache: [Int: (image: CGImage, frameTime: Double)] = [:]
+    /// Kept JPEG-compressed (~30 KB each instead of ~500 KB): a densely filled film has
+    /// hundreds. Decoded when shown, with the last one decoded kept ready.
+    private var cache: [Int: (jpeg: Data, frameTime: Double)] = [:]
+    private var lastDecoded: (key: Int, image: CGImage)?
     private let cacheLock = NSLock()
     private let bucket: Double
     private let duration: Double
@@ -55,7 +60,24 @@ final class ThumbnailGenerator: @unchecked Sendable {
     func cached(_ t: Double) -> CGImage? {
         cacheLock.lock()
         defer { cacheLock.unlock() }
-        return cache[Int(bucketed(t) * 10)]?.image
+        return image(forKey: Int(bucketed(t) * 10))
+    }
+
+    /// Call with cacheLock held.
+    private func image(forKey key: Int) -> CGImage? {
+        if let last = lastDecoded, last.key == key { return last.image }
+        guard let jpeg = cache[key]?.jpeg,
+              let src = CGImageSourceCreateWithData(jpeg as CFData, nil),
+              let img = CGImageSourceCreateImageAtIndex(src, 0, [kCGImageSourceShouldCacheImmediately: true] as CFDictionary) else { return nil }
+        lastDecoded = (key, img)
+        return img
+    }
+
+    private static func compress(_ image: CGImage) -> Data? {
+        let data = NSMutableData()
+        guard let dest = CGImageDestinationCreateWithData(data, UTType.jpeg.identifier as CFString, 1, nil) else { return nil }
+        CGImageDestinationAddImage(dest, image, [kCGImageDestinationLossyCompressionQuality: 0.8] as CFDictionary)
+        return CGImageDestinationFinalize(dest) ? data as Data : nil
     }
 
     /// Where the preview for this time really is (its keyframe), once it's been made.
@@ -70,8 +92,8 @@ final class ThumbnailGenerator: @unchecked Sendable {
         cacheLock.lock()
         defer { cacheLock.unlock() }
         let best = cache.min { abs($0.value.frameTime - t) < abs($1.value.frameTime - t) }
-        guard let best, abs(best.value.frameTime - t) <= window else { return nil }
-        return (Double(best.key) / 10, best.value.frameTime, best.value.image)
+        guard let best, abs(best.value.frameTime - t) <= window, let img = image(forKey: best.key) else { return nil }
+        return (Double(best.key) / 10, best.value.frameTime, img)
     }
 
     /// The closest frame made so far, if it's from (nearly) the same moment.
@@ -80,8 +102,9 @@ final class ThumbnailGenerator: @unchecked Sendable {
         defer { cacheLock.unlock() }
         let target = Int(bucketed(t) * 10)
         let limit = Int(bucket * 10 * 1.5)
-        return cache.min { abs($0.key - target) < abs($1.key - target) }
-            .flatMap { abs($0.key - target) <= limit ? (Double($0.key) / 10, $0.value.image) : nil }
+        guard let best = cache.min(by: { abs($0.key - target) < abs($1.key - target) }), abs(best.key - target) <= limit,
+              let img = image(forKey: best.key) else { return nil }
+        return (Double(best.key) / 10, img)
     }
 
     /// Fills the timeline in the background, coarse to fine (quarters, eighths, …) down to
@@ -110,7 +133,7 @@ final class ThumbnailGenerator: @unchecked Sendable {
             // Look ahead in the direction of travel (a few frames, spaced like the fill).
             if let last = self.lastRequest, last != t {
                 let step = max(self.bucket, self.duration / 400) * (t > last ? 1 : -1)
-                self.ahead = (1...4).map { self.bucketed(t + step * Double($0)) }
+                self.ahead = (1...2).map { self.bucketed(t + step * Double($0)) }
                     .filter { $0 >= 0 && $0 <= self.duration && self.cached($0) == nil }
             }
             self.lastRequest = t
@@ -174,6 +197,8 @@ final class ThumbnailGenerator: @unchecked Sendable {
         packet = av_packet_alloc()
         decoded = av_frame_alloc()
         scaler = sws_alloc_context()
+        // Bilinear is plenty for a 240 pt preview and much cheaper than the default bicubic.
+        scaler?.pointee.flags = UInt32(SWS_BILINEAR.rawValue)
         ready = true
         pump()
     }
@@ -191,6 +216,7 @@ final class ThumbnailGenerator: @unchecked Sendable {
         guard ready, !failed, !busy else { return }
         // Hover requests first; otherwise the next uncached background position.
         let t: Double
+        var background = false
         if let p = pending {
             t = p
             pending = nil
@@ -198,18 +224,25 @@ final class ThumbnailGenerator: @unchecked Sendable {
             t = next
         } else if let next = nextSweep() {
             t = next
+            background = true
         } else {
             return
         }
         busy = true
         defer { busy = false }
-        if let (img, at) = frame(at: t) {
+        if let (img, at) = frame(at: t), let jpeg = Self.compress(img) {
             cacheLock.lock()
-            cache[Int(t * 10)] = (img, at)
+            cache[Int(t * 10)] = (jpeg, at)
             cacheLock.unlock()
             send(t, img)
         }
-        if pending != nil || !ahead.isEmpty || !sweep.isEmpty { queue.async { self.pump() } }
+        if pending != nil || !ahead.isEmpty {
+            queue.async { self.pump() }
+        } else if !sweep.isEmpty {
+            // The background fill is paced (it ran the thread flat out alongside playback);
+            // a hover arriving meanwhile is picked up at once by request().
+            queue.asyncAfter(deadline: .now() + (background ? 0.35 : 0.05)) { self.pump() }
+        }
     }
 
     private func nextAhead() -> Double? {
