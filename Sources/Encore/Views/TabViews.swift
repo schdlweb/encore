@@ -543,20 +543,13 @@ private struct SimklSignIn: View {
                     ProgressView().controlSize(.small)
                 }
             default:
-                LabeledContent("Client ID") {
-                    TextField("", text: $s.simklClientId, prompt: Text("from simkl.com/settings/developer"))
-                        .textFieldStyle(.roundedBorder)
-                }
                 HStack {
                     Button("Sign In with Simkl") { app.simkl.signIn() }
-                        .disabled(s.simklClientId.isEmpty)
-                    Link("Create a Client ID", destination: URL(string: "https://simkl.com/settings/developer/")!)
-                        .font(.system(size: 12))
                     if case .failed(let msg) = app.simkl.status {
                         Text(msg).foregroundStyle(.red).font(.system(size: 12))
                     }
                 }
-                Text("New app on Simkl: any name, Redirect URL urn:ietf:wg:oauth:2.0:oob. Paste its Client ID here.")
+                Text("Opens simkl.com to approve Encore; tracking starts as soon as you do.")
                     .font(.system(size: 11)).foregroundStyle(Theme.textTertiary)
             }
         }

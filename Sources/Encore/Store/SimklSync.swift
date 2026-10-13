@@ -5,9 +5,8 @@ import Observation
 /// Optional Simkl tracking: scrobbles what Encore plays (start, pause, stop; Simkl counts
 /// it watched past 80%) and sends Mark as Watched / Unwatched to your Simkl history.
 ///
-/// Simkl needs an app "Client ID" on every request. Create one free at
-/// simkl.com/settings/developer (redirect URI `urn:ietf:wg:oauth:2.0:oob`) and paste it in
-/// Settings; signing in is then approving a code at simkl.com/pin (OAuth 2.0 device flow).
+/// Signing in is approving a code at simkl.com/pin (OAuth 2.0 device flow) under Encore's
+/// own Simkl app id, so there's nothing to set up first.
 @Observable
 @MainActor
 final class SimklSync {
@@ -28,12 +27,19 @@ final class SimklSync {
         status = token == nil ? .signedOut : .signedIn
     }
 
-    private var clientId: String { settings.simklClientId.trimmingCharacters(in: .whitespaces) }
+    /// Encore's own Simkl app (Simkl ▸ Settings ▸ Developer). A client id is public by
+    /// design: it names the app, not the person, and the device sign-in needs no secret.
+    static let encoreClientId = "2ed7591b53d479327ab3fbfaf59ddd2c1b64babdf28526d499d0110f4b8ba8c5"
+
+    /// Encore's id unless an override is set (defaults write … simklClientId).
+    private var clientId: String {
+        let custom = settings.simklClientId.trimmingCharacters(in: .whitespaces)
+        return custom.isEmpty ? Self.encoreClientId : custom
+    }
 
     // MARK: Signing in (PIN flow)
 
     func signIn() {
-        guard !clientId.isEmpty else { status = .failed("Paste your Simkl Client ID first."); return }
         polling?.cancel()
         polling = Task {
             // OAuth 2.0 device flow: show a code, the user approves it on simkl.com/pin.
