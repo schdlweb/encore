@@ -483,6 +483,7 @@ struct AddonRow: View {
 private struct JellyfinSignIn: View {
     @Environment(AppState.self) private var app
     @State private var password = ""
+    @State private var usePassword = false
 
     var body: some View {
         @Bindable var s = app.settings
@@ -496,25 +497,47 @@ private struct JellyfinSignIn: View {
                     Button("Sign Out") { app.jellyfin.signOut() }
                 }
                 .font(.system(size: 13))
+            case .quickConnect(let code):
+                HStack(spacing: 10) {
+                    Text(code).font(.system(size: 22, weight: .bold, design: .monospaced)).textSelection(.enabled)
+                    ProgressView().controlSize(.small)
+                    Spacer()
+                    if let page = app.jellyfin.configurePage {
+                        Button("Open Configure Page") { NSWorkspace.shared.open(page) }
+                    }
+                    Button("Cancel") { app.jellyfin.cancelQuickConnect() }
+                }
+                Text("Enter this code on your AIOStreams configure page (Connect tab → Quick Connect), pick the profile and approve. Odin's own Quick Connect screen works too.")
+                    .font(.system(size: 11)).foregroundStyle(Theme.textTertiary)
             default:
-                LabeledContent("Profile name") {
-                    TextField("", text: $s.jellyfinProfile, prompt: Text("the profile you picked in the other app"))
-                        .textFieldStyle(.roundedBorder)
-                }
-                LabeledContent("Password") {
-                    SecureField("", text: $password, prompt: Text("your AIOStreams password (password/PIN if it has a PIN)"))
-                        .textFieldStyle(.roundedBorder)
-                }
                 HStack {
-                    Button("Sign In") { Task { await app.jellyfin.signIn(password: password); password = "" } }
-                        .disabled(s.jellyfinProfile.isEmpty || password.isEmpty || app.jellyfin.status == .signingIn)
-                    if app.jellyfin.status == .signingIn { ProgressView().controlSize(.small) }
-                    if case .failed(let msg) = app.jellyfin.status {
-                        Text(msg).foregroundStyle(.red).font(.system(size: 12))
+                    Button("Sign In with Quick Connect") { app.jellyfin.signInWithQuickConnect() }
+                    Button(usePassword ? "Hide password sign-in" : "Use a password instead") { usePassword.toggle() }
+                        .buttonStyle(.link).font(.system(size: 12))
+                }
+                Text("No password needed: approve a code on your AIOStreams configure page and choose the profile there. Or sign in with the profile name and password, as in Odin; the password is remembered, so you can leave it blank next time.")
+                    .font(.system(size: 11)).foregroundStyle(Theme.textTertiary)
+                if usePassword {
+                    LabeledContent("Profile name") {
+                        TextField("", text: $s.jellyfinProfile, prompt: Text("the profile you picked in the other app"))
+                            .textFieldStyle(.roundedBorder)
+                    }
+                    LabeledContent("Password") {
+                        SecureField("", text: $password, prompt: Text(app.jellyfin.hasSavedPassword
+                            ? "leave blank to keep current"
+                            : "your AIOStreams password (password/PIN if it has a PIN)"))
+                            .textFieldStyle(.roundedBorder)
+                    }
+                    HStack {
+                        Button("Sign In") { Task { await app.jellyfin.signIn(password: password); password = "" } }
+                            .disabled(s.jellyfinProfile.isEmpty || (password.isEmpty && !app.jellyfin.hasSavedPassword)
+                                      || app.jellyfin.status == .signingIn)
+                        if app.jellyfin.status == .signingIn { ProgressView().controlSize(.small) }
                     }
                 }
-                Text("The password is only used to sign in; Encore keeps just the sign-in token.")
-                    .font(.system(size: 11)).foregroundStyle(Theme.textTertiary)
+                if case .failed(let msg) = app.jellyfin.status {
+                    Text(msg).foregroundStyle(.red).font(.system(size: 12))
+                }
             }
         }
         // First sync right after signing in.

@@ -1,6 +1,7 @@
 import Foundation
 
-/// Sign-in tokens (AIOStreams, Simkl), kept in a file only your Mac account can read:
+/// Sign-in tokens (AIOStreams, Simkl) and the saved AIOStreams password (so the field can be
+/// left blank and Encore can sign itself back in), kept in a file only your Mac account can read:
 /// ~/Library/Application Support/Encore/credentials.json (permissions 600).
 ///
 /// Not the Keychain: Encore is signed ad hoc, so every new build (and every update) looks
