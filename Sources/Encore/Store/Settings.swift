@@ -70,7 +70,6 @@ final class Settings {
     var scrubPreviews: Bool { didSet { d.set(scrubPreviews, forKey: "scrubPreviews") } }
     /// Play in a separate, resizable window (Infuse-style) instead of over the whole app.
     var autoUpdateCheck: Bool { didSet { d.set(autoUpdateCheck, forKey: "autoUpdateCheck") } }
-    var songPopups: Bool { didSet { d.set(songPopups, forKey: "songPopups") } }
     var showRecommendations: Bool { didSet { d.set(showRecommendations, forKey: "showRecommendations") } }
     var playerInWindow: Bool { didSet { d.set(playerInWindow, forKey: "playerInWindow") } }
 
@@ -100,7 +99,6 @@ final class Settings {
         scrubPreviews = d.object(forKey: "scrubPreviews") as? Bool ?? true
         playerInWindow = d.object(forKey: "playerInWindow") as? Bool ?? true
         showRecommendations = d.object(forKey: "showRecommendations") as? Bool ?? true
-        songPopups = d.object(forKey: "songPopups") as? Bool ?? true
         autoUpdateCheck = d.object(forKey: "autoUpdateCheck") as? Bool ?? true
         catalogOrder = d.stringArray(forKey: "catalogOrder") ?? []
         hiddenCatalogs = Set(d.stringArray(forKey: "hiddenCatalogs") ?? [])

@@ -20,8 +20,6 @@ struct PlayerView: View {
     @State private var pointerOnBar = false
     @State private var lastActivity = Date()
     @State private var seekFlashVisible = false
-    @State private var xray: XRayService.Info?
-    @State private var songToast: XRayService.Song?
     @State private var unloggedWatchTime: Double = 0
     @State private var markedWatched = false
     @State private var skipPromptFresh = false
@@ -220,7 +218,6 @@ struct PlayerView: View {
         .allowsHitTesting(skipPromptFresh || controlsVisible)
         .animation(.easeInOut(duration: 0.4), value: skipPromptFresh)
         .onChange(of: activeSegment?.id) { _, id in
-            if id != nil { showSongToast() }
             skipPromptTask?.cancel()
             guard id != nil else { skipPromptFresh = false; return }
             skipPromptFresh = true
@@ -231,25 +228,6 @@ struct PlayerView: View {
         }
         .animation(.easeInOut(duration: 0.25), value: controlsVisible)
         .animation(.easeInOut(duration: 0.2), value: activeSegment?.id)
-
-        // "♪ Song — Artist" for a few seconds when an opening or ending starts.
-        if let song = songToast {
-            HStack(spacing: 8) {
-                Image(systemName: "music.note")
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(song.kind == .opening ? "Opening" : song.kind == .ending ? "Ending" : "Now Playing")
-                        .font(.system(size: 10, weight: .semibold)).foregroundStyle(.white.opacity(0.65))
-                    Text(song.byline).font(.system(size: 13, weight: .semibold)).lineLimit(1)
-                }
-            }
-            .padding(.horizontal, 14).padding(.vertical, 9)
-            .glass(cornerRadius: 12, tint: .black.opacity(0.4))
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-            .padding(.top, inWindow ? 90 : 70)
-            .padding(.trailing, 24)
-            .allowsHitTesting(false)
-            .transition(.opacity.combined(with: .move(edge: .trailing)))
-        }
 
         if dolbyVisionWarning {
             HStack(spacing: 12) {
@@ -568,37 +546,8 @@ struct PlayerView: View {
 
     // MARK: Lifecycle
 
-    /// The opening or ending playing right now, if the credits/intro times say so.
-    private var currentSong: XRayService.Song? {
-        guard let seg = activeSegment, let songs = xray?.songs else { return nil }
-        switch seg.kind {
-        case .intro: return songs.first { $0.kind == .opening }
-        case .outro: return songs.first { $0.kind == .ending }
-        default: return nil
-        }
-    }
-
-    private func loadXRay() {
-        guard app.settings.songPopups else { return }
-        let meta = request.meta, video = request.video
-        Task {
-            let info = await XRayService.info(meta: meta, video: video)
-            withAnimation(.easeOut(duration: 0.25)) { xray = info }
-        }
-    }
-
-    private func showSongToast() {
-        guard app.settings.songPopups, let song = currentSong else { return }
-        withAnimation(.easeOut(duration: 0.3)) { songToast = song }
-        Task {
-            try? await Task.sleep(for: .seconds(6))
-            withAnimation(.easeIn(duration: 0.4)) { if songToast == song { songToast = nil } }
-        }
-    }
-
     private func start() {
         focused = true
-        loadXRay()
         let p = MPVController(settings: app.settings)
         player = p
         let skip = Double(app.settings.skipInterval)
