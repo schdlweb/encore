@@ -46,11 +46,11 @@ struct HomeView: View {
                         }
                     }
 
-                    // Netflix-style: one row per title you watched, named after it.
+                    // Netflix-style: Top Picks, then two rows named after titles you watched.
                     if app.settings.showRecommendations {
-                        ForEach(recommendationRows, id: \.because) { group in
+                        ForEach(recommendationRows, id: \.title) { group in
                             VStack(alignment: .leading, spacing: 12) {
-                                SectionHeader(title: "Because You Watched \(group.because)")
+                                SectionHeader(title: group.title)
                                 ScrollView(.horizontal, showsIndicators: false) {
                                     LazyHStack(alignment: .top, spacing: 18) {
                                         ForEach(group.items) { rec in
@@ -83,14 +83,28 @@ struct HomeView: View {
 extension HomeView {
     /// Recommendations grouped by the watched title behind them, strongest first; at most
     /// 3 rows, and only titles with a few picks get a row of their own.
-    var recommendationRows: [(because: String, items: [Recommendation])] {
-        var order: [String] = []
-        var groups: [String: [Recommendation]] = [:]
-        for r in app.recommendations {
-            if groups[r.because] == nil { order.append(r.because) }
-            groups[r.because, default: []].append(r)
+    /// "Top Picks for You" (the 15 strongest overall), then up to two "Because You
+    /// Watched …" rows from the rest, so posters don't repeat. If the rest is too thin
+    /// for a row, that row may reuse top picks.
+    var recommendationRows: [(title: String, items: [Recommendation])] {
+        let all = app.recommendations
+        guard !all.isEmpty else { return [] }
+        let top = Array(all.prefix(15))
+        let rest = Array(all.dropFirst(15))
+        func groups(_ recs: [Recommendation]) -> [(String, [Recommendation])] {
+            var order: [String] = []
+            var byBecause: [String: [Recommendation]] = [:]
+            for r in recs {
+                if byBecause[r.because] == nil { order.append(r.because) }
+                byBecause[r.because, default: []].append(r)
+            }
+            return order.compactMap { k in byBecause[k].map { (k, $0) } }.filter { $0.1.count >= 3 }
         }
-        return order.compactMap { k in groups[k].map { (because: k, items: $0) } }.filter { $0.items.count >= 3 }.prefix(3).map { $0 }
+        var because = groups(rest)
+        if because.count < 2 {
+            for g in groups(all) where !because.contains(where: { $0.0 == g.0 }) { because.append(g) }
+        }
+        return [("Top Picks for You", top)] + because.prefix(2).map { ("Because You Watched \($0.0)", $0.1) }
     }
 }
 
