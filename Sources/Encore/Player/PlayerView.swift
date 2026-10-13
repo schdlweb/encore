@@ -641,8 +641,7 @@ struct PlayerView: View {
                let since = playingSince, Date().timeIntervalSince(since) > 2 {
                 makeThumbnailer(p)
             }
-            if app.settings.scrubPreviews, let t = thumbs, !thumbsSweeping,
-               let since = playingSince, Date().timeIntervalSince(since) > 12 {
+            if app.settings.scrubPreviews, let t = thumbs, !thumbsSweeping {
                 thumbsSweeping = true
                 t.prefetch()
             }

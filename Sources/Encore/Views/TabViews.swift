@@ -126,13 +126,7 @@ struct LibraryView: View {
                 if !continuing.isEmpty {
                     VStack(alignment: .leading, spacing: 12) {
                         SectionHeader(title: "Continue Watching")
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            LazyHStack(alignment: .top, spacing: 22) {
-                                ForEach(continuing) { ContinueCard(entry: $0) }
-                            }
-                            .padding(.horizontal, Theme.gutter)
-                            .padding(.vertical, 12)
-                        }
+                        PagedRow(items: continuing, itemWidth: Theme.landscapeWidth, spacing: 22, verticalPadding: 12) { ContinueCard(entry: $0) }
                     }
                 }
 
@@ -157,13 +151,7 @@ struct LibraryView: View {
                 if !history.isEmpty {
                     VStack(alignment: .leading, spacing: 12) {
                         SectionHeader(title: "History")
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            LazyHStack(alignment: .top, spacing: 18) {
-                                ForEach(history.prefix(60)) { HistoryCard(item: $0) }
-                            }
-                            .padding(.horizontal, Theme.gutter)
-                            .padding(.vertical, 12)
-                        }
+                        PagedRow(items: Array(history.prefix(60)), itemWidth: 260, verticalPadding: 12) { HistoryCard(item: $0) }
                     }
                 }
 
@@ -171,16 +159,10 @@ struct LibraryView: View {
                 if !dropped.isEmpty {
                     VStack(alignment: .leading, spacing: 12) {
                         SectionHeader(title: "Dropped")
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            LazyHStack(alignment: .top, spacing: 22) {
-                                ForEach(dropped) { title in
-                                    SavedPoster(title: title)
-                                        .opacity(0.6)
-                                        .contextMenu { DropButton(metaId: title.id) }
-                                }
-                            }
-                            .padding(.horizontal, Theme.gutter)
-                            .padding(.vertical, 12)
+                        PagedRow(items: dropped, itemWidth: Theme.posterWidth, spacing: 22, verticalPadding: 12) { title in
+                            SavedPoster(title: title)
+                                .opacity(0.6)
+                                .contextMenu { DropButton(metaId: title.id) }
                         }
                     }
                 }

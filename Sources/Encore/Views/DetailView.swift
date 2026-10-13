@@ -24,6 +24,11 @@ struct DetailView: View {
 
     private var meta: Meta { full ?? preview }
 
+    private var headerImage: String? {
+        if let bg = full?.background ?? preview.background { return bg }
+        return full != nil ? full?.poster : nil
+    }
+
     var body: some View {
         GeometryReader { geo in
             ScrollView {
@@ -74,7 +79,9 @@ struct DetailView: View {
         ZStack(alignment: .bottomLeading) {
             Color.clear
                 .frame(height: height)
-                .overlay { RemoteImage(url: meta.background ?? meta.poster, maxPixel: 2600) }
+                // The wide background only (a poster stretched to fill looks soft, then
+                // visibly swaps when the full details arrive); usually already loaded by a hover.
+                .overlay { RemoteImage(url: headerImage, maxPixel: 2600, showsEmpty: false) }
                 .clipped()
                 .overlay(LinearGradient(colors: [.black.opacity(0.8), .black.opacity(0.2), .clear], startPoint: .leading, endPoint: .trailing))
                 .mask(LinearGradient(stops: [.init(color: .black, location: 0.6), .init(color: .clear, location: 1)], startPoint: .top, endPoint: .bottom))

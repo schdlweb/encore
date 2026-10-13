@@ -23,26 +23,14 @@ struct HomeView: View {
                                 .padding(.vertical, 8)
                                 .glass(cornerRadius: 10)
                                 .padding(.horizontal, Theme.gutter)
-                            ScrollView(.horizontal, showsIndicators: false) {
-                                LazyHStack(alignment: .top, spacing: 22) {
-                                    ForEach(continuing) { ContinueCard(entry: $0) }
-                                }
-                                .padding(.horizontal, Theme.gutter)
-                                .padding(.vertical, 14)
-                            }
+                            PagedRow(items: continuing, itemWidth: Theme.landscapeWidth, spacing: 22) { ContinueCard(entry: $0) }
                         }
                     }
 
                     if !app.upcoming.isEmpty {
                         VStack(alignment: .leading, spacing: 12) {
                             SectionHeader(title: "Upcoming")
-                            ScrollView(.horizontal, showsIndicators: false) {
-                                LazyHStack(alignment: .top, spacing: 18) {
-                                    ForEach(app.upcoming) { UpcomingCard(item: $0) }
-                                }
-                                .padding(.horizontal, Theme.gutter)
-                                .padding(.vertical, 12)
-                            }
+                            PagedRow(items: app.upcoming, itemWidth: 260, verticalPadding: 12) { UpcomingCard(item: $0) }
                         }
                     }
 
@@ -51,14 +39,8 @@ struct HomeView: View {
                         ForEach(recommendationRows, id: \.title) { group in
                             VStack(alignment: .leading, spacing: 12) {
                                 SectionHeader(title: group.title)
-                                ScrollView(.horizontal, showsIndicators: false) {
-                                    LazyHStack(alignment: .top, spacing: 18) {
-                                        ForEach(group.items) { rec in
-                                            PosterCard(meta: rec.meta, onNotInterested: { app.notInterested(in: rec) })
-                                        }
-                                    }
-                                    .padding(.horizontal, Theme.gutter)
-                                    .padding(.vertical, 14)
+                                PagedRow(items: group.items, itemWidth: Theme.posterWidth) { rec in
+                                    PosterCard(meta: rec.meta, onNotInterested: { app.notInterested(in: rec) })
                                 }
                             }
                         }
@@ -325,6 +307,12 @@ struct CatalogRowView: View {
                     .foregroundStyle(Theme.textTertiary)
                     .padding(.horizontal, Theme.gutter)
                     .frame(height: Theme.posterRowHeight, alignment: .leading)
+            case _ where !row.items.isEmpty:
+                let items = Array(row.items.prefix(40))
+                PagedRow(items: items, itemWidth: Theme.posterWidth) { meta in
+                    let i = items.firstIndex { $0.id == meta.id } ?? 99
+                    PosterCard(meta: meta, rank: ranked && i < 10 ? i + 1 : nil)
+                }
             default:
                 ScrollView(.horizontal, showsIndicators: false) {
                     LazyHStack(alignment: .top, spacing: 18) {
@@ -339,9 +327,6 @@ struct CatalogRowView: View {
                                     Color.clear.frame(width: Theme.posterWidth, height: Theme.posterCaptionHeight)
                                 }
                             }
-                        }
-                        ForEach(Array(row.items.prefix(40).enumerated()), id: \.element.id) { i, meta in
-                            PosterCard(meta: meta, rank: ranked && i < 10 ? i + 1 : nil)
                         }
                     }
                     .padding(.horizontal, Theme.gutter)

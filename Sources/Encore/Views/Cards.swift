@@ -87,6 +87,7 @@ struct PosterCard: View {
             }
         }
         .buttonStyle(.plain)
+        .onHover { if $0, !ScrollActivity.isScrolling { app.warmDetail(meta) } }
         .contextMenu {
             Button(app.watch.isFavorite(meta.id) ? "Remove from Library" : "Add to Library") {
                 app.watch.toggleFavorite(meta)

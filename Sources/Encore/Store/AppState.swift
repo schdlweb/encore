@@ -484,6 +484,22 @@ final class AppState {
         s.lowercased().filter { $0.isLetter || $0.isNumber }
     }
 
+    // MARK: Getting a title page ready
+
+    @ObservationIgnored private var warmTask: Task<Void, Never>?
+
+    /// On hovering a poster: fetch the title's details and decode its full-size background
+    /// and logo, so its page opens already sharp. Only the latest hover is worked on.
+    func warmDetail(_ preview: Meta) {
+        warmTask?.cancel()
+        warmTask = Task {
+            try? await Task.sleep(for: .milliseconds(250))
+            guard !Task.isCancelled, let full = await fullMeta(preview), !Task.isCancelled else { return }
+            if let bg = full.background ?? preview.background { ImagePipeline.shared.prefetch([bg], maxPixel: 2600) }
+            if let logo = full.logo { ImagePipeline.shared.prefetch([logo], maxPixel: 900) }
+        }
+    }
+
     // MARK: Navigation
 
     func open(_ meta: Meta) { routes.append(.detail(meta)) }

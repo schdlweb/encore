@@ -33,6 +33,10 @@ final class ThumbnailGenerator: @unchecked Sendable {
     private let bucket: Double
     private let duration: Double
     private var sweep: [Double] = []
+    /// Spots just ahead of the pointer in the direction it's moving: after the hovered
+    /// spot itself, before the background fill.
+    private var ahead: [Double] = []
+    private var lastRequest: Double?
     private var sweeping = false
     private let deliver: @MainActor (Double, CGImage) -> Void
 
@@ -80,14 +84,17 @@ final class ThumbnailGenerator: @unchecked Sendable {
             .flatMap { abs($0.key - target) <= limit ? (Double($0.key) / 10, $0.value.image) : nil }
     }
 
-    /// Fills the timeline in the background: quarters, eighths, … up to 256 frames, so
-    /// there's a frame within ~30 s of anywhere on a typical film.
+    /// Fills the timeline in the background, coarse to fine (quarters, eighths, …) down to
+    /// one frame every ~12 s, so a ready frame is almost always next to the pointer.
     func prefetch() {
         queue.async {
             guard !self.sweeping, self.duration > 0 else { return }
             self.sweeping = true
             var seen = Set<Int>()
-            for div in [4, 8, 16, 32, 64, 128, 256] {
+            var divs: [Int] = []
+            var d = 4
+            while true { divs.append(d); if self.duration / Double(d) <= 12 || d >= 1024 { break }; d *= 2 }
+            for div in divs {
                 for i in stride(from: 1, to: div, by: 1) {
                     let t = self.bucketed(self.duration * Double(i) / Double(div))
                     if seen.insert(Int(t * 10)).inserted { self.sweep.append(t) }
@@ -100,8 +107,16 @@ final class ThumbnailGenerator: @unchecked Sendable {
     func request(_ t: Double) {
         let t = bucketed(t)
         queue.async {
+            // Look ahead in the direction of travel (a few frames, spaced like the fill).
+            if let last = self.lastRequest, last != t {
+                let step = max(self.bucket, self.duration / 400) * (t > last ? 1 : -1)
+                self.ahead = (1...4).map { self.bucketed(t + step * Double($0)) }
+                    .filter { $0 >= 0 && $0 <= self.duration && self.cached($0) == nil }
+            }
+            self.lastRequest = t
             if let hit = self.cached(t) {
                 self.send(t, hit)
+                self.pump()
                 return
             }
             self.pending = t
@@ -179,6 +194,8 @@ final class ThumbnailGenerator: @unchecked Sendable {
         if let p = pending {
             t = p
             pending = nil
+        } else if let next = nextAhead() {
+            t = next
         } else if let next = nextSweep() {
             t = next
         } else {
@@ -192,7 +209,15 @@ final class ThumbnailGenerator: @unchecked Sendable {
             cacheLock.unlock()
             send(t, img)
         }
-        if pending != nil || !sweep.isEmpty { queue.async { self.pump() } }
+        if pending != nil || !ahead.isEmpty || !sweep.isEmpty { queue.async { self.pump() } }
+    }
+
+    private func nextAhead() -> Double? {
+        while !ahead.isEmpty {
+            let t = ahead.removeFirst()
+            if cached(t) == nil { return t }
+        }
+        return nil
     }
 
     private func nextSweep() -> Double? {
