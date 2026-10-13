@@ -153,6 +153,18 @@ final class WatchStore {
         saveStats()
     }
 
+    // MARK: Ratings
+
+    func rating(for id: String) -> Rating? { stats.ratings[id]?.rating }
+
+    func setRating(_ rating: Rating?, for title: SavedTitle) {
+        if let rating { stats.ratings[title.id] = RatedTitle(title: title, rating: rating, ratedAt: .now) }
+        else { stats.ratings[title.id] = nil }
+        saveStats()
+    }
+
+    var ratedTitles: [RatedTitle] { stats.ratings.values.sorted { $0.ratedAt > $1.ratedAt } }
+
     // MARK: Not interested
 
     func isNotInterested(_ id: String) -> Bool { stats.notInterested.contains(id) }

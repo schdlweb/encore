@@ -145,6 +145,7 @@ struct ContinueCard: View {
         .onHover { if $0 { app.prewarm(entry) } }
         .contextMenu {
             Button("Go to \(entry.title.type == "movie" ? "Movie" : "Show")") { app.open(entry.title) }
+            Menu("Rate") { RatingItems(title: entry.title) }
             Button("Remove from Continue Watching") { app.watch.removeFromContinue(entry.title.id) }
             if entry.season != nil { DropButton(metaId: entry.title.id) }
         }

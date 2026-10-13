@@ -299,6 +299,7 @@ struct HistoryCard: View {
         }
         .buttonStyle(.plain)
         .contextMenu {
+            Menu("Rate") { RatingItems(title: item.title) }
             Button("Remove from History") { app.watch.removeFromHistory(item.videoId) }
             if !item.isMovie {
                 DropButton(metaId: item.title.id)

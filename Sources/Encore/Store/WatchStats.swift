@@ -18,6 +18,22 @@ struct HistoryItem: Codable, Hashable, Identifiable {
     }
 }
 
+/// How much you liked a title.
+enum Rating: Int, Codable, CaseIterable {
+    case dislike = -1, like = 1, love = 2
+
+    var label: String { self == .dislike ? "Not for Me" : self == .like ? "Like This" : "Love This!" }
+    var icon: String { self == .dislike ? "hand.thumbsdown.fill" : self == .like ? "hand.thumbsup.fill" : "heart.fill" }
+    /// How much titles related to this one count in recommendations.
+    var weight: Double { self == .dislike ? -1 : self == .like ? 1.5 : 2.2 }
+}
+
+struct RatedTitle: Codable, Hashable {
+    var title: SavedTitle
+    var rating: Rating
+    var ratedAt: Date
+}
+
 /// Watch-time bookkeeping, kept apart from the library so views that show progress
 /// don't redraw every time a few seconds of viewing are logged. Saved in stats.json.
 struct StatsDisk: Codable {
@@ -28,6 +44,8 @@ struct StatsDisk: Codable {
     var dropped: [String] = []
     /// Titles hidden from Recommended for You.
     var notInterested: [String] = []
+    /// Your ratings, by title id.
+    var ratings: [String: RatedTitle] = [:]
     var seeded = false
 
     init() {}
@@ -38,6 +56,7 @@ struct StatsDisk: Codable {
         history = (try? c.decodeIfPresent([HistoryItem].self, forKey: .history)) ?? []
         dropped = try c.decodeIfPresent([String].self, forKey: .dropped) ?? []
         notInterested = try c.decodeIfPresent([String].self, forKey: .notInterested) ?? []
+        ratings = (try? c.decodeIfPresent([String: RatedTitle].self, forKey: .ratings)) ?? [:]
         seeded = try c.decodeIfPresent(Bool.self, forKey: .seeded) ?? false
     }
 

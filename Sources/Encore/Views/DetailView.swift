@@ -147,6 +147,8 @@ struct DetailView: View {
                     .buttonStyle(PillButtonStyle())
                     .help(app.watch.isFavorite(meta.id) ? "Remove from Library" : "Add to Library")
 
+                    RatingButton(title: SavedTitle(meta))
+
                     Menu {
                         if meta.isSeriesLike, !meta.videos.isEmpty {
                             let regular = meta.videos.filter { ($0.season ?? 1) > 0 && ($0.released ?? .distantPast) <= .now }
@@ -545,4 +547,50 @@ struct StreamActions: View {
 
 private extension Optional where Wrapped == String {
     var orEmpty: String { self ?? "" }
+}
+
+/// Thumbs up/down/heart for a title, as a glass pill like its neighbours.
+struct RatingButton: View {
+    let title: SavedTitle
+    @Environment(AppState.self) private var app
+
+    var body: some View {
+        let current = app.watch.rating(for: title.id)
+        Menu {
+            RatingItems(title: title)
+        } label: {
+            Image(systemName: current?.icon ?? "hand.thumbsup")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(current == .love ? Color.pink : .white)
+                .frame(width: 18, height: 18)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .padding(.horizontal, 22)
+        .padding(.vertical, 11)
+        .background(Capsule().fill(.ultraThinMaterial).environment(\.colorScheme, .dark))
+        .overlay(Capsule().strokeBorder(Color.white.opacity(0.16), lineWidth: 0.75))
+        .contentShape(Capsule())
+        .help(current.map { "Rated: \($0.label)" } ?? "Rate this (shapes Recommended for You)")
+    }
+}
+
+/// The rating choices, for a menu or a right-click menu.
+struct RatingItems: View {
+    let title: SavedTitle
+    @Environment(AppState.self) private var app
+
+    var body: some View {
+        let current = app.watch.rating(for: title.id)
+        ForEach([Rating.love, .like, .dislike], id: \.self) { r in
+            Button { app.rate(title, current == r ? nil : r) } label: {
+                Label(r.label + (current == r ? " ✓" : ""), systemImage: r.icon)
+            }
+        }
+        if current != nil {
+            Divider()
+            Button("Clear Rating") { app.rate(title, nil) }
+        }
+    }
 }

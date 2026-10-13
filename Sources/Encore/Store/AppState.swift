@@ -370,10 +370,16 @@ final class AppState {
         if !force, let t = recommendationsBuiltAt, Date().timeIntervalSince(t) < 6 * 3600 { return }
         recommendationsBuiltAt = Date()
 
+        // Starting points: loved and liked titles first, then what you've watched lately and
+        // My List. Disliked titles never seed, and pull their relatives down instead.
         var seenIds = Set<String>()
-        let seeds = (watch.continueWatching.map(\.title) + watch.watchHistory.map(\.title) + watch.favorites)
-            .filter { !watch.isDropped($0.id) && seenIds.insert($0.id).inserted }
-            .prefix(8)
+        let rated = watch.ratedTitles
+        let positive = rated.filter { $0.rating != .dislike }.sorted { $0.rating.rawValue > $1.rating.rawValue }.map(\.title)
+        let disliked = rated.filter { $0.rating == .dislike }.map(\.title)
+        let seeds = (positive + watch.continueWatching.map(\.title) + watch.watchHistory.map(\.title) + watch.favorites)
+            .filter { !watch.isDropped($0.id) && watch.rating(for: $0.id) != .dislike && seenIds.insert($0.id).inserted }
+            .prefix(10)
+        let negativeSeeds = Array(disliked.prefix(4))
         guard !seeds.isEmpty else { return }
         let watchedIds = Set(watch.watchHistory.map(\.title.id) + watch.history.map(\.title.id) + watch.favorites.map(\.id))
         let watchedNames = Set((watch.watchHistory.map(\.title.name) + watch.history.map(\.title.name)).map(Self.normalizedName))
@@ -388,7 +394,7 @@ final class AppState {
         }
         var scores: [String: (meta: Meta, score: Double, because: String, best: Double)] = [:]
         await withTaskGroup(of: (SavedTitle, [DiscoveryService.Section]).self) { group in
-            for (rank, seed) in seeds.enumerated() {
+            for (rank, seed) in (Array(seeds) + negativeSeeds).enumerated() {
                 group.addTask { @MainActor in
                     guard let meta = await self.fullMeta(type: seed.type, id: seed.id) else { return (seed, []) }
                     _ = rank
@@ -396,13 +402,16 @@ final class AppState {
                 }
             }
             for await (seed, sections) in group {
-                // More recent seeds count a little more.
+                // More recent seeds count a little more; your rating scales it (negative for
+                // titles you didn't like).
                 let recency = 1 + 0.5 * Double(seeds.count - (seeds.firstIndex(of: seed) ?? 0)) / Double(seeds.count)
+                let ratingWeight = watch.rating(for: seed.id)?.weight ?? 1
                 for section in sections {
                     for (i, m) in section.items.prefix(20).enumerated() {
                         guard !watchedIds.contains(m.id), !watch.isDropped(m.id), !watch.isNotInterested(m.id),
                               !watchedNames.contains(Self.normalizedName(m.name)), m.poster != nil else { continue }
-                        let s = weight(section.title) * recency * (1 - Double(i) / 25)
+                        guard watch.rating(for: m.id) == nil else { continue }
+                        let s = weight(section.title) * recency * ratingWeight * (1 - Double(i) / 25)
                         var entry = scores[m.id] ?? (m, 0, seed.name, 0)
                         entry.score += s
                         if s > entry.best { entry.best = s; entry.because = seed.name }
@@ -412,9 +421,16 @@ final class AppState {
             }
         }
         recommendations = scores.values
+            .filter { $0.score > 0 }
             .sorted { $0.score > $1.score }
             .prefix(48)
             .map { Recommendation(meta: $0.meta, because: $0.because) }
+    }
+
+    /// Rates a title and rebuilds recommendations around it.
+    func rate(_ meta: SavedTitle, _ rating: Rating?) {
+        watch.setRating(rating, for: meta)
+        Task { await loadRecommendations(force: true) }
     }
 
     /// Hides a recommendation now and from future ones.
