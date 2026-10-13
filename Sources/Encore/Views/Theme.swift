@@ -73,7 +73,9 @@ struct HoverLift: ViewModifier {
             }
             .scaleEffect(hovering ? scale : 1)
             .zIndex(hovering ? 1 : 0)
-            .animation(.spring(response: 0.32, dampingFraction: 0.75), value: hovering)
+            // Quick: a slow spring made the lifted card trail a fast-moving pointer by a card
+            // or two. Lifting takes 0.12 s, dropping 0.08 s.
+            .animation(hovering ? .easeOut(duration: 0.12) : .easeIn(duration: 0.08), value: hovering)
             // Movement over the card (not just entering it), so the card that ends up under
             // the pointer after a scroll lifts on the next nudge of the mouse.
             .onContinuousHover { phase in
