@@ -1,10 +1,8 @@
 import Foundation
 
-/// X-Ray data for what's playing: the songs (anime openings and endings, from
-/// AnimeThemes, with the episodes each one plays in) and who's in it (anime characters
-/// and their voice actors from AniList; a show's cast and the episode's guest stars from
-/// TVmaze; a film's cast). No per-scene data exists for free, so songs are tied to the
-/// opening/credits times Encore already knows, and people are per episode/title.
+/// Song names for the "now playing" pop-up: an anime's openings and endings from
+/// AnimeThemes, with the episodes each one plays in, matched to the opening/credits
+/// times Encore already knows.
 enum XRayService {
     struct Song: Identifiable, Hashable {
         enum Kind: String { case opening = "Opening", ending = "Ending", insert = "Insert Song" }
@@ -16,21 +14,8 @@ enum XRayService {
         var byline: String { artists.isEmpty ? title : "\(title) — \(artists.joined(separator: ", "))" }
     }
 
-    struct Person: Identifiable, Hashable {
-        var id: String { name + "|" + (role ?? "") }
-        let name: String
-        /// The character played (or the voice actor, for anime characters).
-        let role: String?
-        let photo: String?
-        var isGuest = false
-    }
-
     struct Info {
         var songs: [Song] = []
-        var people: [Person] = []
-        /// "Characters" for anime, "Cast" otherwise.
-        var peopleTitle = "Cast"
-        var isEmpty: Bool { songs.isEmpty && people.isEmpty }
     }
 
     private static let session: URLSession = {
@@ -48,17 +33,7 @@ enum XRayService {
             mal = seasons[video?.season ?? 1] ?? seasons.values.min()
         }
         var info = Info()
-        if let mal {
-            async let songs = animeSongs(mal: mal, episode: video?.episode)
-            async let characters = anilistCharacters(mal: mal)
-            info.songs = await songs
-            info.people = await characters
-            info.peopleTitle = "Characters"
-        }
-        if info.people.isEmpty {
-            info.people = await livePeople(meta: meta, video: video)
-            info.peopleTitle = "Cast"
-        }
+        if let mal { info.songs = await animeSongs(mal: mal, episode: video?.episode) }
         return info
     }
 
@@ -109,78 +84,5 @@ enum XRayService {
             }
         }
         return !understood
-    }
-
-    // MARK: People
-
-    private struct AniListCharacters: Decodable {
-        struct Name: Decodable { var full: String? }
-        struct Img: Decodable { var large: String? }
-        struct VA: Decodable { var name: Name? }
-        struct Edge: Decodable {
-            struct Node: Decodable { var name: Name?; var image: Img? }
-            var role: String?
-            var node: Node?
-            var voiceActors: [VA]?
-        }
-        struct Chars: Decodable { var edges: [Edge] }
-        struct M: Decodable { var characters: Chars? }
-        struct D: Decodable { var Media: M? }
-        var data: D?
-    }
-
-    private static func anilistCharacters(mal: Int) async -> [Person] {
-        let gql = "{ Media(idMal: \(mal), type: ANIME) { characters(sort: [ROLE, RELEVANCE], perPage: 25) { edges { role node { name { full } image { large } } voiceActors(language: JAPANESE) { name { full } } } } } }"
-        var req = URLRequest(url: URL(string: "https://graphql.anilist.co")!)
-        req.httpMethod = "POST"
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.httpBody = try? JSONSerialization.data(withJSONObject: ["query": gql])
-        guard let (data, _) = try? await session.data(for: req),
-              let resp = try? JSONDecoder().decode(AniListCharacters.self, from: data) else { return [] }
-        return (resp.data?.Media?.characters?.edges ?? []).compactMap { e in
-            guard let name = e.node?.name?.full else { return nil }
-            return Person(name: name, role: e.voiceActors?.first?.name?.full.map { "Voiced by \($0)" }, photo: e.node?.image?.large)
-        }
-    }
-
-    private struct TVmazeLookup: Decodable { var id: Int }
-    private struct TVmazeEpisode: Decodable { var id: Int }
-    private struct TVmazeCredit: Decodable {
-        struct Img: Decodable { var medium: String? }
-        struct P: Decodable { var name: String; var image: Img? }
-        struct C: Decodable { var name: String?; var image: Img? }
-        var person: P
-        var character: C?
-    }
-
-    /// A show's main cast plus this episode's guest stars (TVmaze); a film's cast otherwise.
-    private static func livePeople(meta: Meta, video: Video?) async -> [Person] {
-        if meta.isSeriesLike, let imdb = meta.imdbId,
-           let lookup = URL(string: "https://api.tvmaze.com/lookup/shows?imdb=\(imdb)"),
-           let (data, _) = try? await session.data(from: lookup),
-           let show = try? JSONDecoder().decode(TVmazeLookup.self, from: data) {
-            func credits(_ path: String) async -> [TVmazeCredit] {
-                guard let url = URL(string: "https://api.tvmaze.com" + path),
-                      let (d, _) = try? await session.data(from: url) else { return [] }
-                return (try? JSONDecoder().decode(LossyArray<TVmazeCredit>.self, from: d))?.items ?? []
-            }
-            var guests: [TVmazeCredit] = []
-            if let s = video?.season, let e = video?.episode,
-               let epURL = URL(string: "https://api.tvmaze.com/shows/\(show.id)/episodebynumber?season=\(s)&number=\(e)"),
-               let (ed, _) = try? await session.data(from: epURL),
-               let ep = try? JSONDecoder().decode(TVmazeEpisode.self, from: ed) {
-                guests = await credits("/episodes/\(ep.id)/guestcast")
-            }
-            let main = await credits("/shows/\(show.id)/cast")
-            func person(_ c: TVmazeCredit, guest: Bool) -> Person {
-                Person(name: c.person.name, role: c.character?.name, photo: (c.person.image ?? c.character?.image)?.medium?
-                    .replacingOccurrences(of: "http://", with: "https://"), isGuest: guest)
-            }
-            let people = main.map { person($0, guest: false) } + guests.map { person($0, guest: true) }
-            var seen = Set<String>()
-            if !people.isEmpty { return people.filter { seen.insert($0.name).inserted } }
-        }
-        let cast = meta.cast.isEmpty ? await DiscoveryService.cast(for: meta) : meta.cast
-        return cast.map { Person(name: $0.name, role: $0.character, photo: $0.photo) }
     }
 }

@@ -21,7 +21,6 @@ struct PlayerView: View {
     @State private var lastActivity = Date()
     @State private var seekFlashVisible = false
     @State private var xray: XRayService.Info?
-    @State private var xrayPinned = false
     @State private var songToast: XRayService.Song?
     @State private var unloggedWatchTime: Double = 0
     @State private var markedWatched = false
@@ -34,6 +33,8 @@ struct PlayerView: View {
     @State private var info: [(String, String)] = []
     @State private var scrubbing: Double?
     @State private var upNextDismissed = false
+    @State private var upNextFresh = false
+    @State private var upNextTask: Task<Void, Never>?
     @State private var advancing = false
     @State private var addedAddonSubs = false
     @State private var currentURL: URL
@@ -171,8 +172,8 @@ struct PlayerView: View {
         .animation(.easeInOut(duration: 0.25), value: controlsVisible)
         .allowsHitTesting(controlsVisible)
 
-        // Up Next stays up on its own (not with the controls): it's the one way to the
-        // next episode at the credits.
+        // Up Next (which also stands in for Skip Credits): shown when the credits start,
+        // fades after a few seconds, and comes back with the controls when you move.
         VStack {
             Spacer()
             HStack(alignment: .bottom) {
@@ -182,7 +183,19 @@ struct PlayerView: View {
             .padding(.horizontal, 40)
             .padding(.bottom, controlsVisible ? 120 : 40)
         }
+        .opacity(upNextFresh || controlsVisible ? 1 : 0)
+        .allowsHitTesting(upNextFresh || controlsVisible)
+        .animation(.easeInOut(duration: 0.4), value: upNextFresh)
         .animation(.easeInOut(duration: 0.25), value: controlsVisible)
+        .onChange(of: upNextDue) { _, due in
+            upNextTask?.cancel()
+            guard due else { upNextFresh = false; return }
+            upNextFresh = true
+            upNextTask = Task {
+                try? await Task.sleep(for: .seconds(8))
+                if !Task.isCancelled { upNextFresh = false }
+            }
+        }
 
         VStack {
             Spacer()
@@ -218,16 +231,6 @@ struct PlayerView: View {
         }
         .animation(.easeInOut(duration: 0.25), value: controlsVisible)
         .animation(.easeInOut(duration: 0.2), value: activeSegment?.id)
-
-        // X-Ray: who's in it and the music, shown while paused (or pinned with X).
-        if let xray, !xray.isEmpty, app.settings.xrayEnabled, xrayPinned || (p.paused && p.fileLoaded) {
-            XRayPanel(info: xray, nowPlaying: currentSong)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                .padding(.top, inWindow ? 130 : 100)
-                .padding(.leading, 20)
-                .padding(.bottom, 130)
-                .transition(.move(edge: .leading).combined(with: .opacity))
-        }
 
         // "♪ Song — Artist" for a few seconds when an opening or ending starts.
         if let song = songToast {
@@ -467,30 +470,60 @@ struct PlayerView: View {
     }
 
     @ViewBuilder
+    /// At the credits (or the last 45 s): the next episode is up.
+    private var upNextDue: Bool {
+        guard let p = player, nextVideo != nil, !upNextDismissed, p.duration > 120 else { return false }
+        return p.duration - p.position < 45 || activeSegment?.kind == .outro
+    }
+
+    /// One card for the credits: what's next, Play Next, or keep watching the credits.
+    @ViewBuilder
     private func upNextCard(_ p: MPVController) -> some View {
-        if let next = nextVideo, !upNextDismissed, p.duration > 120,
-           p.duration - p.position < 45 || activeSegment?.kind == .outro {
-            HStack(spacing: 14) {
-                RemoteImage(url: next.thumbnail ?? request.meta.background, maxPixel: 300)
-                    .frame(width: 140, height: 79)
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("UP NEXT").font(.system(size: 11, weight: .bold)).foregroundStyle(.white.opacity(0.6))
-                    Text(next.title.isEmpty ? "Episode \(next.episode ?? 0)" : next.title)
-                        .font(.system(size: 14, weight: .semibold)).lineLimit(1)
-                    HStack {
-                        Button(advancing ? "Loading…" : "Play Now") { playNext(next) }
-                            .disabled(advancing)
-                            .buttonStyle(PillButtonStyle(kind: .primary))
-                            .controlSize(.small)
-                        Button("Hide") { upNextDismissed = true }
-                            .buttonStyle(PillButtonStyle())
+        if let next = nextVideo, upNextDue {
+            HStack(spacing: 12) {
+                // The thumbnail is itself a play button.
+                Button { playNext(next) } label: {
+                    ZStack {
+                        RemoteImage(url: next.thumbnail ?? request.meta.background, maxPixel: 240)
+                        Color.black.opacity(0.25)
+                        Image(systemName: advancing ? "hourglass" : "play.fill")
+                            .font(.system(size: 14, weight: .bold))
+                            .foregroundStyle(.white)
+                            .shadow(radius: 3)
                     }
+                    .frame(width: 96, height: 54)
+                    .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .disabled(advancing)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("UP NEXT" + (next.episode.map { " · E\($0)" } ?? ""))
+                        .font(.system(size: 10, weight: .bold)).foregroundStyle(.white.opacity(0.55))
+                    Text(next.title.isEmpty ? "Episode \(next.episode ?? 0)" : next.title)
+                        .font(.system(size: 12, weight: .semibold)).lineLimit(1)
+                    HStack(spacing: 10) {
+                        Button { playNext(next) } label: {
+                            Label(advancing ? "Loading…" : "Play", systemImage: "play.fill")
+                                .font(.system(size: 11, weight: .semibold))
+                                .padding(.horizontal, 10).padding(.vertical, 4)
+                                .background(Capsule().fill(.white))
+                                .foregroundStyle(.black)
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(advancing)
+                        Button("Watch Credits") { withAnimation { upNextDismissed = true } }
+                            .buttonStyle(.plain)
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(.white.opacity(0.7))
+                    }
+                    .fixedSize()
+                    .padding(.top, 2)
                 }
             }
-            .padding(14)
-            .glass(cornerRadius: 16, tint: .black.opacity(0.35))
-            .frame(width: 420)
+            .padding(10)
+            .frame(width: 330, alignment: .leading)
+            .glass(cornerRadius: 14, tint: .black.opacity(0.4))
             .transition(.move(edge: .trailing).combined(with: .opacity))
         }
     }
@@ -546,7 +579,7 @@ struct PlayerView: View {
     }
 
     private func loadXRay() {
-        guard app.settings.xrayEnabled || app.settings.songPopups else { return }
+        guard app.settings.songPopups else { return }
         let meta = request.meta, video = request.video
         Task {
             let info = await XRayService.info(meta: meta, video: video)
@@ -848,8 +881,8 @@ struct PlayerView: View {
     @ViewBuilder
     private var skipButton: some View {
         if let seg = activeSegment, let p = player {
-            if seg.kind == .outro, nextVideo != nil, !upNextDismissed {
-                // The Up Next card covers the credits.
+            if seg.kind == .outro, nextVideo != nil {
+                // The Up Next card covers the credits (Play Next skips them).
                 EmptyView()
             } else {
                 Button { skip(seg, player: p) } label: {
@@ -1028,7 +1061,6 @@ struct PlayerView: View {
             case "f": toggleFullScreen()
             case "m": p.toggleMute()
             case "i": withAnimation { showInfo.toggle() }
-            case "x": withAnimation(.easeOut(duration: 0.25)) { xrayPinned.toggle() }
             case "k": p.togglePause()
             case "n": if let n = nextVideo { playNext(n) }
             default: return .ignored
@@ -1405,88 +1437,5 @@ private struct SubtitleMenu: View, Equatable {
             Image(systemName: "captions.bubble")
         }
         .playerMenuStyle(help: "Subtitles")
-    }
-}
-
-/// The X-Ray sidebar: the song playing now, this episode's music, and its people.
-struct XRayPanel: View {
-    let info: XRayService.Info
-    let nowPlaying: XRayService.Song?
-
-    var body: some View {
-        ScrollView(.vertical, showsIndicators: false) {
-            VStack(alignment: .leading, spacing: 18) {
-                HStack(spacing: 6) {
-                    Image(systemName: "sparkle.magnifyingglass")
-                    Text("X-Ray")
-                }
-                .font(.system(size: 15, weight: .bold))
-
-                if let song = nowPlaying {
-                    section("Now Playing") {
-                        songRow(song, highlighted: true)
-                    }
-                }
-                if !info.songs.isEmpty {
-                    section("Music") {
-                        ForEach(info.songs) { songRow($0, highlighted: false) }
-                    }
-                }
-                if !info.people.isEmpty {
-                    section(info.peopleTitle) {
-                        ForEach(info.people.prefix(24)) { person in
-                            HStack(spacing: 10) {
-                                RemoteImage(url: person.photo, maxPixel: 120)
-                                    .frame(width: 40, height: 40)
-                                    .clipShape(Circle())
-                                VStack(alignment: .leading, spacing: 1) {
-                                    Text(person.name).font(.system(size: 13, weight: .semibold)).lineLimit(1)
-                                    if let role = person.role, !role.isEmpty {
-                                        Text(role).font(.system(size: 11)).foregroundStyle(.white.opacity(0.6)).lineLimit(1)
-                                    }
-                                }
-                                Spacer(minLength: 0)
-                                if person.isGuest {
-                                    Text("Guest").font(.system(size: 9, weight: .bold)).foregroundStyle(.white.opacity(0.7))
-                                        .padding(.horizontal, 5).padding(.vertical, 2)
-                                        .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(.white.opacity(0.35), lineWidth: 0.75))
-                                }
-                            }
-                        }
-                    }
-                }
-                Text("Press X to keep this open while playing")
-                    .font(.system(size: 10)).foregroundStyle(.white.opacity(0.45))
-            }
-            .padding(16)
-        }
-        .frame(width: 300)
-        .frame(maxHeight: 520)
-        .fixedSize(horizontal: false, vertical: true)
-        .glass(cornerRadius: 16, tint: .black.opacity(0.5))
-        .foregroundStyle(.white)
-    }
-
-    private func section<Content: View>(_ title: String, @ViewBuilder _ content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(title.uppercased()).font(.system(size: 10, weight: .bold)).foregroundStyle(.white.opacity(0.5))
-            content()
-        }
-    }
-
-    private func songRow(_ song: XRayService.Song, highlighted: Bool) -> some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: highlighted ? "waveform" : "music.note")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(highlighted ? Theme.accent : .white.opacity(0.6))
-                .frame(width: 18)
-                .symbolEffect(.variableColor.iterative, isActive: highlighted)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(song.title).font(.system(size: 13, weight: .semibold)).lineLimit(2)
-                Text(([song.kind.rawValue + (song.kind == .insert ? "" : " \(song.number)")] + [song.artists.joined(separator: ", ")])
-                        .filter { !$0.isEmpty }.joined(separator: " · "))
-                    .font(.system(size: 11)).foregroundStyle(.white.opacity(0.6)).lineLimit(2)
-            }
-        }
     }
 }

@@ -267,6 +267,10 @@ enum DebugHooks {
         case "updatecheck":
             await app.updater.check(userInitiated: true)
             print("[update] current=\(app.updater.currentVersion) state=\(app.updater.state)"); fflush(stdout)
+        case "seekend":
+            guard let p = MPVController.current, p.duration > 0 else { return }
+            p.seekExact(to: p.duration - 40)
+            print("[seekend] at \(Date())"); fflush(stdout)
         case "pausetest":
             // Toggles pause a few times, timing the call itself and until the UI state flips.
             for _ in 0..<4 {
