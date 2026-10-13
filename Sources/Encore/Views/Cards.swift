@@ -71,7 +71,7 @@ struct PosterCard: View {
                 }
                 .frame(width: width, height: height)
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                .hoverLift()
+                .hoverLift(onLift: { app.warmDetail(meta) })
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(meta.name)
@@ -87,13 +87,7 @@ struct PosterCard: View {
             }
         }
         .buttonStyle(.plain)
-        .onHover { if $0, !ScrollActivity.isScrolling { app.warmDetail(meta) } }
-        .contextMenu {
-            Button(app.watch.favoriteIds.contains(meta.id) ? "Remove from Library" : "Add to Library") {
-                app.watch.toggleFavorite(meta)
-            }
-            if let onNotInterested { Button("Not Interested") { onNotInterested() } }
-        }
+        .modifier(PosterMenu(meta: meta, onNotInterested: onNotInterested))
     }
 }
 
@@ -127,7 +121,7 @@ struct ContinueCard: View {
                 }
                 .frame(width: Theme.landscapeWidth, height: Theme.landscapeHeight)
                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                .hoverLift(scale: 1.05, cornerRadius: 14)
+                .hoverLift(scale: 1.05, cornerRadius: 14, onLift: { app.prewarm(entry) })
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(entry.title.name)
@@ -143,7 +137,6 @@ struct ContinueCard: View {
             }
         }
         .buttonStyle(.plain)
-        .onHover { if $0 { app.prewarm(entry) } }
         .contextMenu {
             Button("Go to \(entry.title.type == "movie" ? "Movie" : "Show")") { app.open(entry.title) }
             Menu("Rate") { RatingItems(title: entry.title) }
@@ -345,5 +338,21 @@ struct EpisodePlaceholder: View {
         }
         .frame(width: 280, height: 158)
         .clipped()
+    }
+}
+
+/// A poster's right-click menu (My List, Not Interested).
+struct PosterMenu: ViewModifier {
+    let meta: Meta
+    var onNotInterested: (() -> Void)?
+    @Environment(AppState.self) private var app
+
+    func body(content: Content) -> some View {
+        content.contextMenu {
+            Button(app.watch.favoriteIds.contains(meta.id) ? "Remove from Library" : "Add to Library") {
+                app.watch.toggleFavorite(meta)
+            }
+            if let onNotInterested { Button("Not Interested") { onNotInterested() } }
+        }
     }
 }

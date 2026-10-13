@@ -50,6 +50,9 @@ extension View {
 struct HoverLift: ViewModifier {
     var scale: CGFloat = 1.07
     var cornerRadius: CGFloat = 12
+    /// Runs when the card lifts (e.g. to preload its page), sharing the one hover tracker
+    /// rather than adding another: every tracker is updated by AppKit as the page scrolls.
+    var onLift: (() -> Void)? = nil
     @State private var hovering = false
 
     func body(content: Content) -> some View {
@@ -77,7 +80,7 @@ struct HoverLift: ViewModifier {
                 switch phase {
                 case .active:
                     // Cards sliding under a still pointer during a scroll don't lift.
-                    if !hovering, !ScrollActivity.isScrolling { hovering = true }
+                    if !hovering, !ScrollActivity.isScrolling { hovering = true; onLift?() }
                 case .ended:
                     if hovering { hovering = false }
                 }
@@ -130,8 +133,8 @@ enum ScrollActivity {
 }
 
 extension View {
-    func hoverLift(scale: CGFloat = 1.07, cornerRadius: CGFloat = 12) -> some View {
-        modifier(HoverLift(scale: scale, cornerRadius: cornerRadius))
+    func hoverLift(scale: CGFloat = 1.07, cornerRadius: CGFloat = 12, onLift: (() -> Void)? = nil) -> some View {
+        modifier(HoverLift(scale: scale, cornerRadius: cornerRadius, onLift: onLift))
     }
 }
 

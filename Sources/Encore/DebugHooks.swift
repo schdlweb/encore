@@ -288,6 +288,64 @@ enum DebugHooks {
                 if w.styleMask.contains(.fullScreen) { w.toggleFullScreen(nil); try? await Task.sleep(for: .seconds(3)) }
                 print("[green]   after exit: fullScreen=\(w.styleMask.contains(.fullScreen))"); fflush(stdout)
             }
+        case "wheel" where parts.count >= 2:
+            // Real scroll-wheel events (pixel deltas, like a trackpad) handed to the window
+            // through AppKit's normal event path, 120 a second, while framestats measures.
+            guard let w = NSApp.windows.first(where: \.isVisible), let root = w.contentView else { return }
+            let point = NSPoint(x: root.bounds.midX, y: root.bounds.midY * 0.8)
+            let end = Date().addingTimeInterval(Double(parts[1]) ?? 6)
+            Task { @MainActor in
+                while Date() < end {
+                    if let cg = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: -12, wheel2: 0, wheel3: 0) {
+                        cg.location = CGPoint(x: w.frame.minX + point.x, y: (NSScreen.screens.first?.frame.height ?? 0) - (w.frame.minY + point.y))
+                        if let e = NSEvent(cgEvent: cg) { w.sendEvent(e) }
+                    }
+                    try? await Task.sleep(for: .milliseconds(8))
+                }
+            }
+        case "mainbuiltin":
+            // Puts the main window on the built-in (120 Hz) screen, for scroll tests.
+            if let screen = NSScreen.screens.first(where: { $0.localizedName.contains("Built-in") }),
+               let w = NSApp.windows.first(where: { $0.isVisible && $0.title != "Player" }) {
+                w.setFrame(screen.visibleFrame.insetBy(dx: 40, dy: 30), display: true)
+            }
+        case "framestats" where parts.count >= 2:
+            // Counts missed display frames for N seconds while something else drives the app
+            // (e.g. real scroll-wheel events), plus total main-thread work.
+            guard let root = NSApp.windows.first(where: \.isVisible)?.contentView else { return }
+            let counter = FrameCounter()
+            let link = root.displayLink(target: counter, selector: #selector(FrameCounter.tick(_:)))
+            link.add(to: .main, forMode: .common)
+            let busy = MainBusyMeter()
+            busy.start()
+            if let w = root.window, let h = NSScreen.screens.first?.frame.height {
+                // Centre of the window in global top-left coordinates (for posting events).
+                print(String(format: "[frames] center %.0f %.0f", w.frame.midX, h - w.frame.midY))
+            }
+            print("[frames] start"); fflush(stdout)
+            let seconds = Double(parts[1]) ?? 6
+            if parts.count >= 3, parts[2] == "wheel", let w = root.window {
+                // Scroll for the whole measurement, with real wheel events through AppKit.
+                let point = NSPoint(x: root.bounds.midX, y: root.bounds.midY * 0.8)
+                let end = Date().addingTimeInterval(seconds)
+                while Date() < end {
+                    if let cg = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: -12, wheel2: 0, wheel3: 0) {
+                        cg.location = CGPoint(x: w.frame.minX + point.x, y: (NSScreen.screens.first?.frame.height ?? 0) - (w.frame.minY + point.y))
+                        if let e = NSEvent(cgEvent: cg) { w.sendEvent(e) }
+                    }
+                    try? await Task.sleep(for: .milliseconds(8))
+                }
+            } else {
+                try? await Task.sleep(for: .seconds(seconds))
+            }
+            link.invalidate()
+            busy.stop()
+            var found: [NSScrollView] = []
+            func walk(_ v: NSView) { if let s = v as? NSScrollView { found.append(s) }; v.subviews.forEach(walk) }
+            walk(root)
+            let page = found.max { ($0.documentView?.frame.height ?? 0) < ($1.documentView?.frame.height ?? 0) }
+            print("[frames] " + counter.report + String(format: " busy=%.0fms scrolledTo=%.0f screen=%@", busy.total * 1000,
+                  page?.contentView.bounds.origin.y ?? -1, root.window?.screen?.localizedName ?? "?")); fflush(stdout)
         case "pausetest":
             // Toggles pause a few times, timing the call itself and until the UI state flips.
             for _ in 0..<4 {
