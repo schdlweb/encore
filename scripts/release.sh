@@ -3,23 +3,29 @@
 # tags, pushes, and creates a GitHub release with the zip. Running copies of Encore
 # offer the update on their next launch (or Encore ▸ Check for Updates…).
 #
-#   ./scripts/release.sh                 # 1.0.0 → 1.0.1
-#   ./scripts/release.sh minor "Notes"   # 1.0.1 → 1.1.0, with release notes
-#   ./scripts/release.sh 2.0.0 "Notes"
+#   ./scripts/release.sh "Notes"           # 1.0.0 → 1.0.1, with release notes
+#   ./scripts/release.sh minor "Notes"     # 1.0.1 → 1.1.0
+#   ./scripts/release.sh major "Notes"     # 1.1.0 → 2.0.0
+#   ./scripts/release.sh 2.3.0 "Notes"     # an exact version
 set -euo pipefail
 cd "${0:A:h}/.."
 export DEVELOPER_DIR=/Library/Developer/CommandLineTools
 REPO=schdlweb/encore
 
 current=$(cat VERSION)
+if ! [[ $current =~ '^[0-9]+\.[0-9]+\.[0-9]+$' ]]; then echo "VERSION isn't a version: $current" >&2; exit 1; fi
 parts=(${(s:.:)current})
-case ${1:-patch} in
+bump=patch
+if [[ ${1:-} == (patch|minor|major) || ${1:-} =~ '^[0-9]+\.[0-9]+\.[0-9]+$' ]]; then
+  bump=$1; shift
+fi
+case $bump in
   patch) next="${parts[1]}.${parts[2]}.$((parts[3] + 1))" ;;
   minor) next="${parts[1]}.$((parts[2] + 1)).0" ;;
   major) next="$((parts[1] + 1)).0.0" ;;
-  *) next=$1 ;;
+  *) next=$bump ;;
 esac
-notes=${2:-"Encore $next"}
+notes=${1:-"Encore $next"}
 
 if [[ -n $(git status --porcelain -- VERSION) ]]; then echo "VERSION has uncommitted changes" >&2; exit 1; fi
 echo "Releasing $current → $next"
