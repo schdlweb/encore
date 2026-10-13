@@ -276,6 +276,18 @@ enum DebugHooks {
             let b = JellyfinSync.itemId(imdb: "tt9522300", type: "series", season: 1, episode: 3) ?? "-"
             let c = JellyfinSync.itemId(imdb: "tt0816692", type: "movie") ?? "-"
             print("[jf] \(a) \(b) \(c) decode=\(String(describing: JellyfinSync.decode(b)))"); fflush(stdout)
+        case "greentest":
+            // Clicks the player window's green button and reports whether it went full screen.
+            for round in 1...2 {
+                guard let w = NSApp.windows.first(where: { $0.title == "Player" && $0.isVisible }),
+                      let green = w.standardWindowButton(.zoomButton) else { print("[green] no window"); fflush(stdout); return }
+                print("[green] round \(round): target=\(String(describing: green.target.map { type(of: $0) })) action=\(String(describing: green.action)) behavior=\(w.collectionBehavior.rawValue)")
+                green.performClick(nil)
+                try? await Task.sleep(for: .seconds(3))
+                print("[green]   after click: fullScreen=\(w.styleMask.contains(.fullScreen)) frame=\(w.frame.size)")
+                if w.styleMask.contains(.fullScreen) { w.toggleFullScreen(nil); try? await Task.sleep(for: .seconds(3)) }
+                print("[green]   after exit: fullScreen=\(w.styleMask.contains(.fullScreen))"); fflush(stdout)
+            }
         case "pausetest":
             // Toggles pause a few times, timing the call itself and until the UI state flips.
             for _ in 0..<4 {

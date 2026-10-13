@@ -1218,9 +1218,27 @@ struct PlayerWindowContent: View {
 /// once (which only made the green button work the first time).
 struct PlayerWindowConfigurator: NSViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator() }
-    func makeNSView(context: Context) -> NSView { NSView() }
+
+    /// Attaches when the view actually lands in its window. (Doing it from updateNSView
+    /// depended on SwiftUI redrawing this view after the window existed, which stopped
+    /// happening once the player redrew less, and the green button went back to "zoom".)
+    final class WindowWatcher: NSView {
+        var onWindow: ((NSWindow) -> Void)?
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if let window { onWindow?(window) }
+        }
+    }
+
+    func makeNSView(context: Context) -> NSView {
+        let view = WindowWatcher()
+        let coordinator = context.coordinator
+        view.onWindow = { w in MainActor.assumeIsolated { coordinator.attach(w) } }
+        return view
+    }
+
     func updateNSView(_ view: NSView, context: Context) {
-        DispatchQueue.main.async { if let w = view.window { context.coordinator.attach(w) } }
+        if let w = view.window { context.coordinator.attach(w) }
     }
 
     @MainActor
