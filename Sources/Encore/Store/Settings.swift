@@ -69,6 +69,10 @@ final class Settings {
     var autoSkipIntros: Bool { didSet { d.set(autoSkipIntros, forKey: "autoSkipIntros") } }
     var scrubPreviews: Bool { didSet { d.set(scrubPreviews, forKey: "scrubPreviews") } }
     /// Play in a separate, resizable window (Infuse-style) instead of over the whole app.
+    var jellyfinSync: Bool { didSet { d.set(jellyfinSync, forKey: "jellyfinSync") } }
+    var jellyfinProfile: String { didSet { d.set(jellyfinProfile, forKey: "jellyfinProfile") } }
+    var simklSync: Bool { didSet { d.set(simklSync, forKey: "simklSync") } }
+    var simklClientId: String { didSet { d.set(simklClientId, forKey: "simklClientId") } }
     var autoUpdateCheck: Bool { didSet { d.set(autoUpdateCheck, forKey: "autoUpdateCheck") } }
     var showRecommendations: Bool { didSet { d.set(showRecommendations, forKey: "showRecommendations") } }
     var playerInWindow: Bool { didSet { d.set(playerInWindow, forKey: "playerInWindow") } }
@@ -100,6 +104,10 @@ final class Settings {
         playerInWindow = d.object(forKey: "playerInWindow") as? Bool ?? true
         showRecommendations = d.object(forKey: "showRecommendations") as? Bool ?? true
         autoUpdateCheck = d.object(forKey: "autoUpdateCheck") as? Bool ?? true
+        jellyfinSync = d.bool(forKey: "jellyfinSync")
+        jellyfinProfile = d.string(forKey: "jellyfinProfile") ?? ""
+        simklSync = d.bool(forKey: "simklSync")
+        simklClientId = d.string(forKey: "simklClientId") ?? ""
         catalogOrder = d.stringArray(forKey: "catalogOrder") ?? []
         hiddenCatalogs = Set(d.stringArray(forKey: "hiddenCatalogs") ?? [])
     }

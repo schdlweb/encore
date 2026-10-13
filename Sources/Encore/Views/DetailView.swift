@@ -152,14 +152,14 @@ struct DetailView: View {
                     Menu {
                         if meta.isSeriesLike, !meta.videos.isEmpty {
                             let regular = meta.videos.filter { ($0.season ?? 1) > 0 && ($0.released ?? .distantPast) <= .now }
-                            Button("Mark Show as Watched") { app.watch.setWatched(meta, videos: regular, watched: true) }
-                            Button("Mark Show as Unwatched") { app.watch.setWatched(meta, videos: meta.videos, watched: false) }
+                            Button("Mark Show as Watched") { app.setWatched(meta, videos: regular, watched: true) }
+                            Button("Mark Show as Unwatched") { app.setWatched(meta, videos: meta.videos, watched: false) }
                             Divider()
                             DropButton(metaId: meta.id)
                         } else if app.watch.isWatched(meta.id) {
-                            Button("Mark as Unwatched") { app.watch.setWatched(meta, videos: [], watched: false) }
+                            Button("Mark as Unwatched") { app.setWatched(meta, videos: [], watched: false) }
                         } else {
-                            Button("Mark as Watched") { app.watch.setWatched(meta, videos: [], watched: true) }
+                            Button("Mark as Watched") { app.setWatched(meta, videos: [], watched: true) }
                         }
                     } label: {
                         Image(systemName: "ellipsis")
@@ -229,9 +229,9 @@ struct DetailView: View {
                     }
                     .contextMenu {
                         if allWatched {
-                            Button("Mark \(s == 0 ? "Specials" : "Season \(s)") as Unwatched") { app.watch.setWatched(meta, videos: seasonVideos, watched: false) }
+                            Button("Mark \(s == 0 ? "Specials" : "Season \(s)") as Unwatched") { app.setWatched(meta, videos: seasonVideos, watched: false) }
                         } else {
-                            Button("Mark \(s == 0 ? "Specials" : "Season \(s)") as Watched") { app.watch.setWatched(meta, videos: seasonVideos, watched: true) }
+                            Button("Mark \(s == 0 ? "Specials" : "Season \(s)") as Watched") { app.setWatched(meta, videos: seasonVideos, watched: true) }
                         }
                     }
                     .buttonStyle(.plain)
@@ -258,12 +258,12 @@ struct DetailView: View {
                             Button("Choose Stream…") { app.picker = PickerTarget(meta: meta, video: v) }
                             Divider()
                             if app.watch.isWatched(v.id) {
-                                Button("Mark as Unwatched") { app.watch.setWatched(meta, videos: [v], watched: false) }
+                                Button("Mark as Unwatched") { app.setWatched(meta, videos: [v], watched: false) }
                             } else {
-                                Button("Mark as Watched") { app.watch.setWatched(meta, videos: [v], watched: true) }
+                                Button("Mark as Watched") { app.setWatched(meta, videos: [v], watched: true) }
                             }
                             if (v.season ?? 0) > 0 {
-                                Button("Mark Watched Up to Here") { app.watch.setWatched(meta, videos: episodes(upTo: v), watched: true) }
+                                Button("Mark Watched Up to Here") { app.markWatched(upTo: v, in: meta, episodes: episodes(upTo: v)) }
                             }
                             if app.watch.progress(videoId: v.id) > 0 {
                                 Divider()

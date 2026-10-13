@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Observation
 import SwiftUI
@@ -137,6 +138,9 @@ final class AppState {
     let watch = WatchStore()
     let downloads = DownloadManager()
     let updater = Updater()
+    /// Watch progress shared with AIOStreams' Jellyfin profile (Odin etc.), and Simkl.
+    let jellyfin: JellyfinSync
+    let simkl: SimklSync
 
     var tab: Tab = .home { didSet { if tab != oldValue { routes = [] } } }
     var routes: [Route] = []
@@ -169,7 +173,42 @@ final class AppState {
     private var rowModels: [String: CatalogRowModel] = [:]
 
     init() {
+        jellyfin = JellyfinSync(settings: settings, watch: watch)
+        simkl = SimklSync(settings: settings)
         if !settings.manifestURL.isEmpty { Task { await connect() } }
+        // Pick up what the other app played: on launch (after connecting), whenever Encore
+        // comes to the front, and every 5 minutes.
+        NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { Task { await self?.pullSync() } }
+        }
+        Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { Task { await self?.pullSync() } }
+        }
+    }
+
+    // MARK: Sync (AIOStreams Jellyfin, Simkl)
+
+    func pullSync() async {
+        guard client != nil, ProcessInfo.processInfo.environment["ENCORE_ROUTE"] == nil else { return }
+        await jellyfin.pull { [weak self] type, id in await self?.fullMeta(type: type, id: id) }
+    }
+
+    func setWatched(_ meta: Meta, videos: [Video], watched: Bool) {
+        watch.setWatched(meta, videos: videos, watched: watched)
+        jellyfin.setWatched(meta: meta, videos: videos, watched: watched)
+        simkl.setWatched(meta: meta, videos: videos, watched: watched)
+    }
+
+    /// Watched through this episode (and every regular one before it).
+    func markWatched(upTo video: Video, in meta: Meta, episodes: [Video]) {
+        watch.setWatched(meta, videos: episodes, watched: true)
+        jellyfin.playedUpTo(meta: meta, video: video)
+        simkl.setWatched(meta: meta, videos: episodes, watched: true)
+    }
+
+    func setDropped(_ metaId: String, _ dropped: Bool) {
+        watch.setDropped(metaId, dropped)
+        if let meta = metaCache[metaId] { jellyfin.setDropped(meta: meta, dropped: dropped) }
     }
 
     // MARK: Addon
@@ -190,6 +229,7 @@ final class AppState {
             connection = .loaded
             await loadHeroes()
             // The show you were last watching is the likeliest thing to be played next.
+            await pullSync()
             if let latest = watch.continueWatching.first { prewarm(latest) }
         } catch {
             connection = .failed(error.localizedDescription)

@@ -569,6 +569,11 @@ struct PlayerView: View {
 
     private func teardown() {
         saveProgress()
+        if let p = player, playingSince != nil {
+            let finished = markedWatched || reachedEnd(p)
+            app.jellyfin.playbackStopped(meta: request.meta, video: request.video, position: finished ? p.duration : p.position, finished: finished)
+            app.simkl.scrobble("stop", meta: request.meta, video: request.video, position: finished ? p.duration : p.position, duration: p.duration)
+        }
         app.watch.logWatchTime(unloggedWatchTime, isMovie: request.video == nil)
         unloggedWatchTime = 0
         nowPlaying?.end()
@@ -607,6 +612,13 @@ struct PlayerView: View {
                 unloggedWatchTime = 0
             }
             // Keep Control Center / media keys in sync: on every pause change, else every 5 s.
+            if p.fileLoaded, reportedPaused != p.paused {
+                // Pause and resume reach AIOStreams and Simkl as they happen.
+                app.jellyfin.playbackProgress(meta: request.meta, video: request.video, position: p.position, paused: p.paused)
+                app.simkl.scrobble(p.paused ? "pause" : "start", meta: request.meta, video: request.video, position: p.position, duration: p.duration)
+            } else if p.fileLoaded, tick % 60 == 0 {
+                app.jellyfin.playbackProgress(meta: request.meta, video: request.video, position: p.position, paused: p.paused)
+            }
             if p.fileLoaded, reportedPaused != p.paused || tick % 10 == 0 {
                 reportedPaused = p.paused
                 nowPlaying?.update(position: p.position, duration: p.duration, paused: p.paused, speed: p.speed)
@@ -617,7 +629,11 @@ struct PlayerView: View {
                 addedAddonSubs = true
                 Task { await loadAddonSubtitles(p) }
             }
-            if p.fileLoaded, !p.buffering, playingSince == nil { playingSince = Date() }
+            if p.fileLoaded, !p.buffering, playingSince == nil {
+                playingSince = Date()
+                app.jellyfin.playbackStarted(meta: request.meta, video: request.video, position: p.position)
+                app.simkl.scrobble("start", meta: request.meta, video: request.video, position: p.position, duration: p.duration)
+            }
             // Open the preview renderer once playback is going (opening a 4K stream takes it
             // a few seconds, so it's ready before the first hover), and fill the timeline in
             // the background after playback has settled.

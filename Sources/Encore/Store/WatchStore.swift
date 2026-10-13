@@ -298,6 +298,17 @@ final class WatchStore {
 
     func isWatched(_ videoId: String) -> Bool { (disk.progress[videoId] ?? 0) > 0.92 }
 
+    /// Progress played in another app (AIOStreams' Jellyfin), newer than what's here.
+    func applyRemoteProgress(title: SavedTitle, videoId: String, season: Int?, episode: Int?,
+                             episodeTitle: String?, thumbnail: String?, position: Double, duration: Double, at: Date) {
+        let entry = WatchEntry(title: title, videoId: videoId, season: season, episode: episode,
+                               episodeTitle: episodeTitle, episodeThumbnail: thumbnail,
+                               position: position, duration: duration > 0 ? duration : max(position * 1.5, 1), updatedAt: at)
+        disk.entries[title.id] = entry
+        if duration > 0 { disk.progress[videoId] = entry.progress }
+        save()
+    }
+
     func removeFromContinue(_ metaId: String) {
         disk.entries[metaId] = nil
         save()

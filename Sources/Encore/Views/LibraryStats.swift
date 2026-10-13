@@ -326,9 +326,9 @@ struct DropButton: View {
 
     var body: some View {
         if app.watch.isDropped(metaId) {
-            Button("Pick Show Back Up") { app.watch.setDropped(metaId, false) }
+            Button("Pick Show Back Up") { app.setDropped(metaId, false) }
         } else {
-            Button("Drop Show") { app.watch.setDropped(metaId, true) }
+            Button("Drop Show") { app.setDropped(metaId, true) }
         }
     }
 }

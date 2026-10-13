@@ -241,8 +241,7 @@ struct SettingsView: View {
                     case .failed(let m): Label(m, systemImage: "xmark.octagon").foregroundStyle(.red).font(.system(size: 13))
                     case .loaded:
                         if let m = app.manifest {
-                            Label("\(m.name) \(m.version ?? "") · \(m.catalogs.count) catalogs", systemImage: "checkmark.circle.fill")
-                                .foregroundStyle(Theme.rating).font(.system(size: 13))
+                            AddonRow(manifest: m)
                         }
                     case .idle: EmptyView()
                     }
@@ -290,6 +289,18 @@ struct SettingsView: View {
                         ForEach([5, 10, 15, 30], id: \.self) { Text("\($0) seconds").tag($0) }
                     }
                     note("Changes apply the next time a video starts.")
+                }
+
+                card("Sync") {
+                    Toggle("Sync with AIOStreams (Jellyfin profile)", isOn: $s.jellyfinSync)
+                        .onChange(of: s.jellyfinSync) { app.jellyfin.refreshStatus() }
+                    note("Shares watch progress with apps that use your AIOStreams as a Jellyfin server (Odin, Infuse, Swiftfin…), as one of its profiles. Whichever app played something last sets where you resume.")
+                    if s.jellyfinSync { JellyfinSignIn() }
+                    Divider().padding(.vertical, 4)
+                    Toggle("Track on Simkl", isOn: $s.simklSync)
+                        .onChange(of: s.simklSync) { app.simkl.refreshStatus() }
+                    note("Scrobbles what you watch to your Simkl history. If your AIOStreams already sends history to Simkl and you sync with it above, leave this off so plays aren't counted twice.")
+                    if s.simklSync { SimklSignIn() }
                 }
 
                 card("Updates") {
@@ -425,5 +436,129 @@ struct OnboardingView: View {
         guard !url.isEmpty else { return }
         app.settings.manifestURL = url
         Task { await app.connect() }
+    }
+}
+
+/// The connected addon, Fusion-style: name, version and what it provides, with Configure
+/// (the addon's own settings page) and Copy Link.
+struct AddonRow: View {
+    let manifest: Manifest
+    @Environment(AppState.self) private var app
+
+    private var configureURL: URL? {
+        let raw = app.settings.manifestURL
+        guard raw.hasSuffix("manifest.json") else { return nil }
+        return URL(string: String(raw.dropLast("manifest.json".count)) + "configure")
+    }
+
+    var body: some View {
+        HStack(spacing: 12) {
+            RemoteImage(url: manifest.logo, contentMode: .fit, maxPixel: 120)
+                .frame(width: 34, height: 34)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(manifest.name).font(.system(size: 14, weight: .semibold))
+                Text(["v\(manifest.version ?? "?")", manifest.resources.map(\.name).joined(separator: ", "), "\(manifest.catalogs.count) catalogs"]
+                        .filter { !$0.isEmpty }.joined(separator: "  ·  "))
+                    .font(.system(size: 12)).foregroundStyle(Theme.textTertiary).lineLimit(1)
+            }
+            Spacer()
+            if let configureURL {
+                Button("Configure") { NSWorkspace.shared.open(configureURL) }
+            }
+        }
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 10).fill(Color.white.opacity(0.05)))
+        .contentShape(Rectangle())
+        .contextMenu {
+            Button("Copy Link") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(app.settings.manifestURL, forType: .string)
+            }
+            if let configureURL { Button("Configure") { NSWorkspace.shared.open(configureURL) } }
+            Button("Reload") { Task { await app.connect() } }
+        }
+    }
+}
+
+private struct JellyfinSignIn: View {
+    @Environment(AppState.self) private var app
+    @State private var password = ""
+
+    var body: some View {
+        @Bindable var s = app.settings
+        VStack(alignment: .leading, spacing: 8) {
+            switch app.jellyfin.status {
+            case .signedIn(let name):
+                HStack {
+                    Label("Signed in as \(name)", systemImage: "checkmark.circle.fill").foregroundStyle(Theme.rating)
+                    Spacer()
+                    Button("Sync Now") { Task { await app.pullSync() } }
+                    Button("Sign Out") { app.jellyfin.signOut() }
+                }
+                .font(.system(size: 13))
+            default:
+                LabeledContent("Profile name") {
+                    TextField("", text: $s.jellyfinProfile, prompt: Text("the profile you picked in the other app"))
+                        .textFieldStyle(.roundedBorder)
+                }
+                LabeledContent("Password") {
+                    SecureField("", text: $password, prompt: Text("your AIOStreams password (password/PIN if it has a PIN)"))
+                        .textFieldStyle(.roundedBorder)
+                }
+                HStack {
+                    Button("Sign In") { Task { await app.jellyfin.signIn(password: password); password = "" } }
+                        .disabled(s.jellyfinProfile.isEmpty || password.isEmpty || app.jellyfin.status == .signingIn)
+                    if app.jellyfin.status == .signingIn { ProgressView().controlSize(.small) }
+                    if case .failed(let msg) = app.jellyfin.status {
+                        Text(msg).foregroundStyle(.red).font(.system(size: 12))
+                    }
+                }
+                Text("The password is only used to sign in; Encore keeps the sign-in token in your Keychain.")
+                    .font(.system(size: 11)).foregroundStyle(Theme.textTertiary)
+            }
+        }
+    }
+}
+
+private struct SimklSignIn: View {
+    @Environment(AppState.self) private var app
+
+    var body: some View {
+        @Bindable var s = app.settings
+        VStack(alignment: .leading, spacing: 8) {
+            switch app.simkl.status {
+            case .signedIn:
+                HStack {
+                    Label("Signed in to Simkl", systemImage: "checkmark.circle.fill").foregroundStyle(Theme.rating)
+                    Spacer()
+                    Button("Sign Out") { app.simkl.signOut() }
+                }
+                .font(.system(size: 13))
+            case .waitingForCode(let code, let url):
+                HStack(spacing: 10) {
+                    Text("Enter").foregroundStyle(Theme.textSecondary)
+                    Text(code).font(.system(size: 18, weight: .bold, design: .monospaced)).textSelection(.enabled)
+                    Text("at").foregroundStyle(Theme.textSecondary)
+                    Link(url.host ?? url.absoluteString, destination: url)
+                    ProgressView().controlSize(.small)
+                }
+            default:
+                LabeledContent("Client ID") {
+                    TextField("", text: $s.simklClientId, prompt: Text("from simkl.com/settings/developer"))
+                        .textFieldStyle(.roundedBorder)
+                }
+                HStack {
+                    Button("Sign In with Simkl") { app.simkl.signIn() }
+                        .disabled(s.simklClientId.isEmpty)
+                    Link("Create a Client ID", destination: URL(string: "https://simkl.com/settings/developer/")!)
+                        .font(.system(size: 12))
+                    if case .failed(let msg) = app.simkl.status {
+                        Text(msg).foregroundStyle(.red).font(.system(size: 12))
+                    }
+                }
+                Text("New app on Simkl: any name, Redirect URL urn:ietf:wg:oauth:2.0:oob. Paste its Client ID here.")
+                    .font(.system(size: 11)).foregroundStyle(Theme.textTertiary)
+            }
+        }
     }
 }

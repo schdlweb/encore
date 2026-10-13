@@ -271,6 +271,11 @@ enum DebugHooks {
             guard let p = MPVController.current, p.duration > 0 else { return }
             p.seekExact(to: p.duration - 40)
             print("[seekend] at \(Date())"); fflush(stdout)
+        case "jfids":
+            let a = JellyfinSync.itemId(imdb: "tt9522300", type: "series") ?? "-"
+            let b = JellyfinSync.itemId(imdb: "tt9522300", type: "series", season: 1, episode: 3) ?? "-"
+            let c = JellyfinSync.itemId(imdb: "tt0816692", type: "movie") ?? "-"
+            print("[jf] \(a) \(b) \(c) decode=\(String(describing: JellyfinSync.decode(b)))"); fflush(stdout)
         case "pausetest":
             // Toggles pause a few times, timing the call itself and until the UI state flips.
             for _ in 0..<4 {
