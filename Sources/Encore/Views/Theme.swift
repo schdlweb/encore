@@ -71,10 +71,21 @@ struct HoverLift: ViewModifier {
             .scaleEffect(hovering ? scale : 1)
             .zIndex(hovering ? 1 : 0)
             .animation(.spring(response: 0.32, dampingFraction: 0.75), value: hovering)
-            .onHover { inside in
-                // Cards sliding under a still pointer during a scroll don't lift.
-                if inside, ScrollActivity.isScrolling { return }
-                hovering = inside
+            // Movement over the card (not just entering it), so the card that ends up under
+            // the pointer after a scroll lifts on the next nudge of the mouse.
+            .onContinuousHover { phase in
+                switch phase {
+                case .active:
+                    // Cards sliding under a still pointer during a scroll don't lift.
+                    if !hovering, !ScrollActivity.isScrolling { hovering = true }
+                case .ended:
+                    if hovering { hovering = false }
+                }
+            }
+            // When a scroll (or a row's ‹ › paging) settles, drop any lift: the card that
+            // was lifted has usually moved out from under the pointer without being told.
+            .onReceive(NotificationCenter.default.publisher(for: ScrollActivity.settled)) { _ in
+                if hovering { hovering = false }
             }
     }
 }
@@ -84,15 +95,32 @@ struct HoverLift: ViewModifier {
 @MainActor
 enum ScrollActivity {
     private(set) static var isScrolling = false
+    /// Posted when a scroll comes to rest.
+    static let settled = Notification.Name("EncoreScrollSettled")
     private static var monitor: Any?
     private static var settle: DispatchWorkItem?
+
+    /// For scrolls that aren't wheel/trackpad gestures (the rows' ‹ › buttons).
+    static func scrolled(for seconds: Double) {
+        isScrolling = true
+        settle?.cancel()
+        let work = DispatchWorkItem {
+            isScrolling = false
+            NotificationCenter.default.post(name: settled, object: nil)
+        }
+        settle = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + seconds, execute: work)
+    }
 
     static func install() {
         guard monitor == nil else { return }
         monitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { event in
             isScrolling = true
             settle?.cancel()
-            let work = DispatchWorkItem { isScrolling = false }
+            let work = DispatchWorkItem {
+                isScrolling = false
+                NotificationCenter.default.post(name: settled, object: nil)
+            }
             settle = work
             // Momentum events keep arriving until the scroll stops; settle shortly after.
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.18, execute: work)

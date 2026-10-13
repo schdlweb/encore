@@ -13,10 +13,14 @@ struct PagedRow<Item: Identifiable, Content: View>: View {
 
     @State private var leading: Item.ID?
     @State private var hovering = false
-    @State private var width: CGFloat = 1200
+    /// The row's width, read only when a button is clicked: a plain reference, so
+    /// measuring it never redraws or re-lays-out the row.
+    @State private var size = SizeBox()
+
+    final class SizeBox { var width: CGFloat = 1200 }
 
     private var leadingIndex: Int { leading.flatMap { id in items.firstIndex { $0.id == id } } ?? 0 }
-    private var perPage: Int { max(1, Int((width - Theme.gutter * 2 + spacing) / (itemWidth + spacing))) }
+    private var perPage: Int { max(1, Int((size.width - Theme.gutter * 2 + spacing) / (itemWidth + spacing))) }
     private var canGoBack: Bool { leadingIndex > 0 }
     private var canGoForward: Bool { leadingIndex + perPage < items.count }
 
@@ -30,15 +34,22 @@ struct PagedRow<Item: Identifiable, Content: View>: View {
         }
         .contentMargins(.horizontal, Theme.gutter, for: .scrollContent)
         .scrollPosition(id: $leading, anchor: .leading)
-        .background(GeometryReader { g in Color.clear.onAppear { width = g.size.width }.onChange(of: g.size.width) { _, w in width = w } })
-        .overlay(alignment: .leading) { arrow("chevron.left", visible: canGoBack) { page(-1) } }
-        .overlay(alignment: .trailing) { arrow("chevron.right", visible: canGoForward) { page(1) } }
+        .background(GeometryReader { g in
+            let _ = { size.width = g.size.width }()
+            Color.clear
+        })
+        // Built only while the pointer is over this row.
+        .overlay(alignment: .leading) { if showArrows { arrow("chevron.left", visible: canGoBack) { page(-1) } } }
+        .overlay(alignment: .trailing) { if showArrows { arrow("chevron.right", visible: canGoForward) { page(1) } } }
         .onHover { h in withAnimation(.easeOut(duration: 0.15)) { hovering = h } }
     }
+
+    private var showArrows: Bool { hovering || ProcessInfo.processInfo.environment["ENCORE_SHOW_ARROWS"] != nil }
 
     private func page(_ direction: Int) {
         let target = min(max(0, leadingIndex + direction * perPage), max(0, items.count - perPage))
         guard items.indices.contains(target) else { return }
+        ScrollActivity.scrolled(for: 0.5)
         withAnimation(.easeInOut(duration: 0.45)) { leading = items[target].id }
     }
 
@@ -56,7 +67,8 @@ struct PagedRow<Item: Identifiable, Content: View>: View {
         .buttonStyle(.plain)
         .padding(.horizontal, 10)
         .padding(.bottom, 24) // centred on the artwork, not the captions under it
-        .opacity((hovering || ProcessInfo.processInfo.environment["ENCORE_SHOW_ARROWS"] != nil) && visible ? 1 : 0)
-        .allowsHitTesting(hovering && visible)
+        .opacity(visible ? 1 : 0)
+        .allowsHitTesting(visible)
+        .transition(.opacity)
     }
 }

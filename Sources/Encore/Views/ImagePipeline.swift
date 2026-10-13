@@ -12,12 +12,17 @@ final class ImagePipeline: @unchecked Sendable {
     static let shared = ImagePipeline()
 
     private let memory = NSCache<NSString, NSImage>()
+    /// Full-screen backgrounds (≈15 MB each decoded) live apart from posters and stills,
+    /// so preloading a few of them on hover can't push the posters out and make scrolling
+    /// re-decode them.
+    private let large = NSCache<NSString, NSImage>()
     private let session: URLSession
     private var inFlight: [String: Task<NSImage?, Never>] = [:]
     private let lock = NSLock()
 
     private init() {
         memory.totalCostLimit = 400 << 20
+        large.totalCostLimit = 150 << 20
         let cfg = URLSessionConfiguration.default
         cfg.urlCache = URLCache.shared
         cfg.requestCachePolicy = .returnCacheDataElseLoad
@@ -36,13 +41,15 @@ final class ImagePipeline: @unchecked Sendable {
     }
 
     /// Memory-cache hit only; lets a view show its image on the first frame.
+    private func cache(for maxPixel: Int) -> NSCache<NSString, NSImage> { maxPixel > 1200 ? large : memory }
+
     func cached(_ url: URL, maxPixel: Int) -> NSImage? {
-        memory.object(forKey: key(url, maxPixel) as NSString)
+        cache(for: maxPixel).object(forKey: key(url, maxPixel) as NSString)
     }
 
     func image(_ url: URL, maxPixel: Int) async -> NSImage? {
         let k = key(url, maxPixel)
-        if let hit = memory.object(forKey: k as NSString) { return hit }
+        if let hit = cache(for: maxPixel).object(forKey: k as NSString) { return hit }
 
         lock.lock()
         if let running = inFlight[k] {
@@ -62,7 +69,7 @@ final class ImagePipeline: @unchecked Sendable {
         lock.unlock()
         if let img {
             let cost = Int(img.size.width * img.size.height * 4)
-            memory.setObject(img, forKey: k as NSString, cost: cost)
+            cache(for: maxPixel).setObject(img, forKey: k as NSString, cost: cost)
         }
         return img
     }

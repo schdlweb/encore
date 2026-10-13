@@ -26,6 +26,14 @@ enum NativeMenu {
     static func show(_ entries: [MenuEntry]) {
         var actions: [Action] = []
         let menu = build(entries, actions: &actions)
+        // AppKit lays a submenu out the first time the pointer reaches it, which made moving
+        // between Speed and Source lag at first. Lay them all out now, before showing.
+        func prepare(_ m: NSMenu) {
+            m.update()
+            _ = m.size
+            for item in m.items { if let sub = item.submenu { prepare(sub) } }
+        }
+        prepare(menu)
         // popUp blocks until the menu closes, so `actions` (the item targets) stay alive.
         menu.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
         _ = actions
