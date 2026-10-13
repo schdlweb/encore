@@ -719,7 +719,15 @@ struct PlayerView: View {
         let headroom = screen?.maximumPotentialExtendedDynamicRangeColorComponentValue ?? 1
         let want = app.settings.hdrOutput && p.isHDRVideo && headroom > 1.5
         // SDR white is ~100 nits on this scale, so the headroom gives the screen's peak.
+        let switching = want != p.hdrOutput
         p.setHDROutput(want, peakNits: max(400, Double(headroom) * 100))
+        if switching {
+            // Said as the picture fades back in (the switch itself happens while it's dark).
+            Task {
+                try? await Task.sleep(for: .milliseconds(500))
+                showToast(want ? "Switched to HDR" : "Switched to SDR")
+            }
+        }
     }
 
     private func refreshQualityTags(_ p: MPVController) {
@@ -871,6 +879,7 @@ struct PlayerView: View {
     }
 
     private func showToast(_ text: String) {
+        if ProcessInfo.processInfo.environment["ENCORE_ROUTE"] != nil { print("[toast] \(text)"); fflush(stdout) }
         withAnimation { toast = text }
         Task {
             try? await Task.sleep(for: .seconds(2.5))
