@@ -241,6 +241,8 @@ struct Meta: Decodable, Hashable, Identifiable {
     var logo: String?
     var description: String?
     var releaseInfo: String?
+    /// Full release (or first-air) date, when the catalog gives one.
+    var released: Date?
     var imdbRating: String?
     var runtime: String?
     var genres: [String]
@@ -284,7 +286,7 @@ struct Meta: Decodable, Hashable, Identifiable {
 
     enum K: String, CodingKey {
         case id, type, name, poster, posterShape, background, logo, description, releaseInfo, year
-        case imdbRating, runtime, genres, genre, cast, director, links, videos, trailers, app_extras
+        case imdbRating, runtime, genres, genre, cast, director, links, videos, trailers, app_extras, released
         case trailerStreams, writer, country, status, _malId, _imdbId, imdb_id
     }
     struct AppExtras: Decodable { var cast: LossyArray<CastMember>?; var certification: String? }
@@ -302,6 +304,7 @@ struct Meta: Decodable, Hashable, Identifiable {
         logo = c.lenient(.logo)
         description = c.lenient(.description)
         releaseInfo = c.flexString(.releaseInfo) ?? c.flexString(.year)
+        if let s = c.lenient(.released, as: String.self) { released = parseISODate(s) }
         imdbRating = c.flexString(.imdbRating)
         runtime = c.flexString(.runtime)
         let links: [MetaLink] = c.lossyArray(.links)
@@ -355,6 +358,7 @@ struct Meta: Decodable, Hashable, Identifiable {
         m.description = full.description ?? description
         m.imdbRating = full.imdbRating ?? imdbRating
         m.releaseInfo = full.releaseInfo ?? releaseInfo
+        m.released = full.released ?? released
         if m.genres.isEmpty { m.genres = genres }
         m.trailerYouTubeId = full.trailerYouTubeId ?? trailerYouTubeId
         return m

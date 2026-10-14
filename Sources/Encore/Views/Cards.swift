@@ -15,8 +15,9 @@ struct PosterCard: View {
 
     private var badge: String? {
         if app.watch.inProgressIds.contains(meta.id) { return "In Progress" }
-        let year = Calendar.current.component(.year, from: .now)
-        if let y = meta.year.flatMap(Int.init), y >= year {
+        // Released in the last 60 days (not counting upcoming ones). Catalogs that only
+        // give a year can't tell that, so those get no badge rather than a guess.
+        if let released = meta.released, released <= .now, Date().timeIntervalSince(released) < 60 * 86400 {
             return "New"
         }
         return nil
