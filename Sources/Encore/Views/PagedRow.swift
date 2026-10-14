@@ -41,7 +41,17 @@ struct PagedRow<Item: Identifiable, Content: View>: View {
         // Built only while the pointer is over this row.
         .overlay(alignment: .leading) { if showArrows { arrow("chevron.left", visible: canGoBack) { page(-1) } } }
         .overlay(alignment: .trailing) { if showArrows { arrow("chevron.right", visible: canGoForward) { page(1) } } }
-        .onHover { h in withAnimation(.easeOut(duration: 0.15)) { hovering = h } }
+        // Movement over the row, not just entering it: rows sliding under a still pointer
+        // during a scroll don't build their buttons, and the row that ends up under the
+        // pointer shows them on the next nudge of the mouse (as HoverLift does for cards).
+        .onContinuousHover { phase in
+            switch phase {
+            case .active:
+                if !hovering, !ScrollActivity.isScrolling { withAnimation(.easeOut(duration: 0.15)) { hovering = true } }
+            case .ended:
+                if hovering { withAnimation(.easeOut(duration: 0.15)) { hovering = false } }
+            }
+        }
     }
 
     private var showArrows: Bool { hovering || ProcessInfo.processInfo.environment["ENCORE_SHOW_ARROWS"] != nil }

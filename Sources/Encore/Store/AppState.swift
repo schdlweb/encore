@@ -69,8 +69,12 @@ final class CatalogRowModel: Identifiable {
         await firstPage?.value
     }
 
-    func retry(_ client: AddonClient?) {
-        guard case .failed = state else { return }
+    func retry(_ client: AddonClient?, force: Bool = false) {
+        switch state {
+        case .failed: break
+        case .loaded where force && items.isEmpty: break
+        default: return
+        }
         state = .idle
         Task { await loadIfNeeded(client) }
     }

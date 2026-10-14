@@ -263,6 +263,7 @@ struct Meta: Decodable, Hashable, Identifiable {
     /// The title's IMDb id, even when the addon keys it by MAL/Kitsu id.
     var imdbId: String? {
         if id.hasPrefix("tt") { return id }
+        if id.hasPrefix("imdb:tt") { return String(id.dropFirst(5)) } // some catalogs prefix it
         if let r = rawImdbId, r.hasPrefix("tt") { return r }
         let fromVideo = videos.first?.id.split(separator: ":").first.map(String.init)
         return fromVideo?.hasPrefix("tt") == true ? fromVideo : nil

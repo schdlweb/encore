@@ -49,6 +49,7 @@ struct HomeView: View {
                     ForEach(app.rows) { row in
                         CatalogRowView(row: row)
                     }
+                    BrokenCatalogsNote()
                     Color.clear.frame(height: 40)
                 }
             }
@@ -224,7 +225,9 @@ struct HeroCarousel: View {
             }
             .padding(.horizontal, Theme.gutter)
             .padding(.bottom, 64)
-            .animation(.easeInOut(duration: 0.35), value: meta.id)
+            // Swapped, not cross-faded: SwiftUI redrew fading text on the CPU every frame,
+            // which stalled the page at each slide change.
+            .animation(nil, value: meta.id)
 
             // Page dots and arrows.
             HStack(spacing: 6) {
@@ -286,7 +289,25 @@ struct CatalogRowView: View {
         return n.contains("top 10") || n.contains("trending") || n.contains("popular")
     }
 
+    /// Failed or empty: the row steps aside (it's listed at the bottom of Home instead).
+    private var broken: Bool {
+        switch row.state {
+        case .failed: true
+        case .loaded: row.items.isEmpty
+        default: false
+        }
+    }
+
     var body: some View {
+        if broken {
+            Color.clear.frame(height: 0)
+                .task { app.prefetchRows(after: row) }
+        } else {
+            content
+        }
+    }
+
+    private var content: some View {
         VStack(alignment: .leading, spacing: 12) {
             SectionHeader(title: row.def.name) { app.open(row.def) }
             switch row.state {
@@ -394,5 +415,51 @@ struct BackBar: View {
         }
         .padding(.horizontal, Theme.gutter)
         .padding(.top, 90)
+    }
+}
+
+/// The catalogs that failed to load or came back empty, listed once at the bottom of
+/// Home instead of as broken rows, with a way to try them again.
+struct BrokenCatalogsNote: View {
+    @Environment(AppState.self) private var app
+
+    private var broken: [CatalogRowModel] {
+        app.rows.filter { row in
+            switch row.state {
+            case .failed: true
+            case .loaded: row.items.isEmpty
+            default: false
+            }
+        }
+    }
+
+    var body: some View {
+        let rows = broken
+        if !rows.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle").foregroundStyle(.orange)
+                    Text(rows.count == 1 ? "1 catalog couldn't be loaded" : "\(rows.count) catalogs couldn't be loaded")
+                        .font(.system(size: 13, weight: .semibold))
+                    Spacer()
+                    Button("Retry") { for row in rows { row.retry(app.client, force: true) } }
+                        .buttonStyle(PillButtonStyle())
+                        .controlSize(.small)
+                }
+                Text(rows.map { row in
+                    if case .failed(let why) = row.state { return "\(row.def.name) (\(why))" }
+                    return "\(row.def.name) (came back empty)"
+                }.joined(separator: " · "))
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.textTertiary)
+                    .lineLimit(4)
+                Text("They're hidden from Home. You can turn catalogs off in Settings → Home Screen.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.textTertiary)
+            }
+            .padding(16)
+            .glass(cornerRadius: 14, tint: .black.opacity(0.3))
+            .padding(.horizontal, Theme.gutter)
+        }
     }
 }

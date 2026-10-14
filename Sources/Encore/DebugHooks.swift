@@ -346,6 +346,11 @@ enum DebugHooks {
             let page = found.max { ($0.documentView?.frame.height ?? 0) < ($1.documentView?.frame.height ?? 0) }
             print("[frames] " + counter.report + String(format: " busy=%.0fms scrolledTo=%.0f screen=%@", busy.total * 1000,
                   page?.contentView.bounds.origin.y ?? -1, root.window?.screen?.localizedName ?? "?")); fflush(stdout)
+        case "postercheck":
+            let primary = await ImagePipeline.shared.image(URL(string: "https://photos.hancinema.net/photos/photo359591.jpg")!, maxPixel: 450)
+            let backup = backupPoster("tt0443584").flatMap(URL.init(string:))
+            let fallback = backup == nil ? nil : await ImagePipeline.shared.image(backup!, maxPixel: 450)
+            print("[poster] primary=\(primary == nil ? "failed" : "ok") backup=\(fallback.map { "\(Int($0.size.width))x\(Int($0.size.height))" } ?? "failed")"); fflush(stdout)
         case "pausetest":
             // Toggles pause a few times, timing the call itself and until the UI state flips.
             for _ in 0..<4 {

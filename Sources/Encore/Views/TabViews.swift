@@ -180,7 +180,11 @@ struct SavedPoster: View {
     var body: some View {
         Button { app.open(title) } label: {
             VStack(alignment: .leading, spacing: 8) {
-                RemoteImage(url: title.poster, maxPixel: 450)
+                ZStack {
+                    PosterFallback(name: title.name)
+                    RemoteImage(url: title.poster ?? backupPoster(title.id.hasPrefix("tt") ? title.id : nil), maxPixel: 450,
+                                fallbackURL: title.poster == nil ? nil : backupPoster(title.id.hasPrefix("tt") ? title.id : nil), showsEmpty: false)
+                }
                     .frame(width: Theme.posterWidth, height: Theme.posterHeight)
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                     .hoverLift()

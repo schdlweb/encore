@@ -31,7 +31,10 @@ struct PosterCard: View {
         Button { app.open(meta) } label: {
             VStack(alignment: .leading, spacing: 8) {
                 ZStack {
-                    RemoteImage(url: meta.poster, maxPixel: 450)
+                    // The title shows if no poster loads at all.
+                    PosterFallback(name: meta.name)
+                    RemoteImage(url: meta.poster ?? backupPoster(meta.imdbId), maxPixel: 450,
+                                fallbackURL: meta.poster == nil ? nil : backupPoster(meta.imdbId), showsEmpty: false)
                         .frame(width: width, height: height)
                     LinearGradient(colors: [.clear, .black.opacity(0.75)], startPoint: .center, endPoint: .bottom)
                     VStack {
@@ -353,6 +356,29 @@ struct PosterMenu: ViewModifier {
                 app.watch.toggleFavorite(meta)
             }
             if let onNotInterested { Button("Not Interested") { onNotInterested() } }
+        }
+    }
+}
+
+/// Stremio's poster for an IMDb title: the backup when a catalog's own poster link is
+/// dead or blocked (some sites refuse images to other apps).
+func backupPoster(_ imdb: String?) -> String? {
+    imdb.map { "https://images.metahub.space/poster/medium/\($0)/img" }
+}
+
+/// What a poster card shows when no image could be loaded: the title on a soft gradient.
+struct PosterFallback: View {
+    let name: String
+
+    var body: some View {
+        ZStack {
+            LinearGradient(colors: [Color.white.opacity(0.10), Color.white.opacity(0.03)], startPoint: .top, endPoint: .bottom)
+            Text(name)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(Theme.textSecondary)
+                .multilineTextAlignment(.center)
+                .lineLimit(4)
+                .padding(12)
         }
     }
 }
