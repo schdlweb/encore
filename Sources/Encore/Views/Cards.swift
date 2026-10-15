@@ -100,11 +100,16 @@ struct ContinueCard: View {
     let entry: WatchEntry
     @Environment(AppState.self) private var app
 
+    /// An episode that came out since you caught up, not started yet.
+    private var isNew: Bool { entry.duration == 0 }
+
     var body: some View {
         Button { resume() } label: {
             VStack(alignment: .leading, spacing: 8) {
                 ZStack(alignment: .bottom) {
-                    RemoteImage(url: entry.episodeThumbnail ?? entry.title.background ?? entry.title.poster, maxPixel: 700)
+                    // A just-aired episode's still often isn't up yet; the show's backdrop stands in.
+                    RemoteImage(url: entry.episodeThumbnail ?? entry.title.background ?? entry.title.poster, maxPixel: 700,
+                                fallbackURL: entry.episodeThumbnail == nil ? nil : entry.title.background ?? entry.title.poster)
                         .frame(width: Theme.landscapeWidth, height: Theme.landscapeHeight)
                     LinearGradient(colors: [.clear, .black.opacity(0.7)], startPoint: .center, endPoint: .bottom)
                     HStack(spacing: 10) {
@@ -115,7 +120,7 @@ struct ContinueCard: View {
                                     Capsule().fill(.white).frame(width: g.size.width * entry.progress)
                                 }
                             }
-                        Text([entry.episodeLabel, formatRemaining(entry.remaining)].compactMap { $0 }.joined(separator: " · "))
+                        Text([entry.episodeLabel, isNew ? "New Episode" : formatRemaining(entry.remaining)].compactMap { $0 }.joined(separator: " · "))
                             .font(.system(size: 11, weight: .bold))
                             .foregroundStyle(.white)
                             .fixedSize()
@@ -144,7 +149,11 @@ struct ContinueCard: View {
         .contextMenu {
             Button("Go to \(entry.title.type == "movie" ? "Movie" : "Show")") { app.open(entry.title) }
             Menu("Rate") { RatingItems(title: entry.title) }
-            Button("Remove from Continue Watching") { app.watch.removeFromContinue(entry.title.id) }
+            if isNew {
+                Button("Hide New Episode") { app.hideNewEpisode(entry) }
+            } else {
+                Button("Remove from Continue Watching") { app.watch.removeFromContinue(entry.title.id) }
+            }
             if entry.season != nil { DropButton(metaId: entry.title.id) }
         }
     }

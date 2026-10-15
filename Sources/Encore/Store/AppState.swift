@@ -167,6 +167,20 @@ final class AppState {
     var heroes: [Meta] = []
     /// Next unaired episode of each show being followed, soonest first.
     var upcoming: [UpcomingEpisode] = []
+    /// Shows you were caught up on whose next episode has since come out, as Continue
+    /// Watching entries that haven't been started (duration 0). Found with `upcoming`.
+    var newEpisodes: [WatchEntry] = []
+
+    /// Continue Watching: titles in progress, plus new episodes of shows you're caught up
+    /// on, most recent first. A new episode drops out once you start or hide it.
+    var continueRow: [WatchEntry] {
+        let inProgress = watch.continueWatching
+        let ids = Set(inProgress.map(\.title.id))
+        let fresh = newEpisodes.filter {
+            !ids.contains($0.title.id) && !watch.isDropped($0.title.id) && watch.entry(for: $0.title.id)?.videoId != $0.videoId
+        }
+        return (inProgress + fresh).sorted { $0.updatedAt > $1.updatedAt }
+    }
     @ObservationIgnored private var upcomingCheckedAt: Date?
     /// Titles picked from what you've watched, best first.
     var recommendations: [Recommendation] = []
@@ -328,7 +342,9 @@ final class AppState {
     func fullMeta(_ preview: Meta) async -> Meta? {
         if let m = metaCache[preview.id] { return m }
         guard let client else { return nil }
-        guard let full = try? await client.meta(type: preview.type, id: preview.id) else { return nil }
+        async let title = SearchService.imdbTitle(preview.id)
+        guard var full = try? await client.meta(type: preview.type, id: preview.id) else { return nil }
+        if let t = await title { full.name = t }
         let merged = await addingMissingAnimeSeasons(preview.merged(with: full))
         metaCache[preview.id] = merged
         return merged
@@ -336,7 +352,11 @@ final class AppState {
 
     func fullMeta(type: String, id: String) async -> Meta? {
         if let m = metaCache[id] { return m }
-        guard let client, let full = try? await client.meta(type: type, id: id) else { return nil }
+        guard let client else { return nil }
+        async let title = SearchService.imdbTitle(id)
+        guard var full = try? await client.meta(type: type, id: id) else { return nil }
+        // The addon names some titles by their original title; IMDb's is the English one.
+        if let t = await title { full.name = t }
         let completed = await addingMissingAnimeSeasons(full)
         metaCache[id] = completed
         return completed
@@ -387,22 +407,49 @@ final class AppState {
             .filter { $0.type != "movie" && !watch.isDropped($0.id) && seen.insert($0.id).inserted }
             .prefix(25)
         var found: [UpcomingEpisode] = []
-        await withTaskGroup(of: UpcomingEpisode?.self) { group in
+        var fresh: [WatchEntry] = []
+        await withTaskGroup(of: (UpcomingEpisode?, WatchEntry?).self) { group in
             for title in followed {
                 group.addTask { @MainActor in
-                    guard let meta = await self.fullMeta(type: title.type, id: title.id) else { return nil }
+                    guard let meta = await self.fullMeta(type: title.type, id: title.id) else { return (nil, nil) }
                     let now = Date()
+                    let newEpisode = self.newEpisode(of: meta, now: now)
                     let next = meta.videos
                         .filter { ($0.season ?? 1) > 0 && ($0.released ?? .distantPast) > now }
                         .min { ($0.released ?? .distantFuture) < ($1.released ?? .distantFuture) }
-                    guard let next else { return nil }
+                    guard let next else { return (nil, newEpisode) }
                     let lengths = await DiscoveryService.episodeDetails(for: meta)
-                    return UpcomingEpisode(meta: meta, video: next, runtime: lengths.minutes(season: next.season, episode: next.episode))
+                    return (UpcomingEpisode(meta: meta, video: next, runtime: lengths.minutes(season: next.season, episode: next.episode)), newEpisode)
                 }
             }
-            for await item in group { if let item { found.append(item) } }
+            for await (item, newEpisode) in group {
+                if let item { found.append(item) }
+                if let newEpisode { fresh.append(newEpisode) }
+            }
         }
         upcoming = found.sorted { ($0.video.released ?? .distantFuture) < ($1.video.released ?? .distantFuture) }
+        newEpisodes = fresh.filter { !hiddenNewEpisodes.contains($0.videoId) }
+    }
+
+    /// Hidden from Continue Watching for this session (right-click → Hide).
+    @ObservationIgnored private var hiddenNewEpisodes: Set<String> = []
+
+    func hideNewEpisode(_ entry: WatchEntry) {
+        hiddenNewEpisodes.insert(entry.videoId)
+        newEpisodes.removeAll { $0.videoId == entry.videoId }
+    }
+
+    /// The episode after the one you last finished, if it came out after you finished it
+    /// (so you were caught up) and you haven't watched it yet.
+    private func newEpisode(of meta: Meta, now: Date) -> WatchEntry? {
+        guard let e = watch.entry(for: meta.id), e.isFinished,
+              let last = meta.videos.first(where: { $0.id == e.videoId }),
+              let next = nextVideo(in: meta, after: last),
+              let aired = next.released, aired <= now, aired > e.updatedAt,
+              !watch.isWatched(next.id) else { return nil }
+        return WatchEntry(title: SavedTitle(meta), videoId: next.id, season: next.season, episode: next.episode,
+                          episodeTitle: next.title.isEmpty ? nil : next.title, episodeThumbnail: next.thumbnail,
+                          position: 0, duration: 0, updatedAt: aired)
     }
 
     // MARK: Recommendations

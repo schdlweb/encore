@@ -122,7 +122,7 @@ struct LibraryView: View {
 
                 ScreenTimeSection()
 
-                let continuing = app.watch.continueWatching
+                let continuing = app.continueRow
                 if !continuing.isEmpty {
                     VStack(alignment: .leading, spacing: 12) {
                         SectionHeader(title: "Continue Watching")

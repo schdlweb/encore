@@ -80,6 +80,15 @@ enum SearchService {
         }
     }
 
+    /// IMDb's display title for one title (English, e.g. "The Ramparts of Ice"), where the
+    /// addon passes on the original one ("Koori no Jyouheki").
+    static func imdbTitle(_ id: String) async -> String? {
+        guard id.hasPrefix("tt"), let url = URL(string: "https://v3.sg.media-imdb.com/suggestion/x/\(id).json"),
+              let (data, _) = try? await session.data(from: url),
+              let resp = try? JSONDecoder().decode(IMDbResponse.self, from: data) else { return nil }
+        return resp.d?.items.first { $0.id == id }?.l.flatMap { $0.isEmpty ? nil : $0 }
+    }
+
     /// IMDb image URLs accept size directives; the originals are up to 3000px.
     private static func resizedIMDbImage(_ url: String) -> String {
         url.replacingOccurrences(of: "._V1_.jpg", with: "._V1_QL80_UX400_.jpg")

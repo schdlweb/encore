@@ -13,7 +13,7 @@ struct HomeView: View {
                         Color.clear.frame(height: 110)
                     }
 
-                    let continuing = app.watch.continueWatching
+                    let continuing = app.continueRow
                     if !continuing.isEmpty {
                         VStack(alignment: .leading, spacing: 14) {
                             Text("Continue Watching")
