@@ -77,7 +77,7 @@ struct MediaTrack: Identifiable, Hashable {
 final class MPVController {
     var position: Double = 0
     var duration: Double = 0
-    var paused = false
+    var paused = false { didSet { updateDisplayAwake() } }
     var buffering = true
     var seeking = false
     var cacheSeconds: Double = 0
@@ -88,8 +88,8 @@ final class MPVController {
     var subtitleTracks: [MediaTrack] = []
     var selectedAudio: Int?
     var selectedSubtitle: Int?
-    var fileLoaded = false
-    var endedNaturally = false
+    var fileLoaded = false { didSet { updateDisplayAwake() } }
+    var endedNaturally = false { didSet { updateDisplayAwake() } }
     var errorMessage: String?
 
     @ObservationIgnored nonisolated(unsafe) private var mpv: OpaquePointer?
@@ -396,6 +396,23 @@ final class MPVController {
         }
     }
 
+    // MARK: Display sleep
+
+    /// Held while a video is playing, so the screen doesn't dim or sleep mid-episode. (mpv
+    /// does this itself only for its own windows; here it draws into Encore's view.)
+    @ObservationIgnored private var displayAwake: NSObjectProtocol?
+
+    private func updateDisplayAwake() {
+        let playing = mpv != nil && fileLoaded && !paused && !endedNaturally
+        if playing, displayAwake == nil {
+            displayAwake = ProcessInfo.processInfo.beginActivity(options: [.idleDisplaySleepDisabled, .userInitiated],
+                                                                 reason: "Playing video")
+        } else if !playing, let token = displayAwake {
+            ProcessInfo.processInfo.endActivity(token)
+            displayAwake = nil
+        }
+    }
+
     // MARK: Teardown
 
     func shutdown() {
@@ -411,6 +428,7 @@ final class MPVController {
         guard let handle = mpv else { return }
         mpv_set_wakeup_callback(handle, nil, nil)
         mpv = nil
+        updateDisplayAwake()
         eventQueue.async { mpv_terminate_destroy(handle) }
     }
 
