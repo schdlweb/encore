@@ -15,6 +15,12 @@ struct MediaTrack: Identifiable, Hashable {
     var isDefault: Bool
     var isForced: Bool
 
+    /// Named as a dub or voice-over ("DubLikTV", Russian "Дубляж", "MVO", …).
+    var isDub: Bool {
+        guard let t = title?.lowercased() else { return false }
+        return ["dub", "дубл", "mvo", "dvo", "многоголос", "двухголос", "одноголос", "закадров"].contains { t.contains($0) }
+    }
+
     var languageName: String? {
         guard let lang, lang != "und" else { return nil }
         return Locale.current.localizedString(forLanguageCode: lang) ?? lang.uppercased()

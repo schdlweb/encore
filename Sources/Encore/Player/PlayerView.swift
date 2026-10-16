@@ -35,6 +35,7 @@ struct PlayerView: View {
     @State private var upNextTask: Task<Void, Never>?
     @State private var advancing = false
     @State private var addedAddonSubs = false
+    @State private var checkedDubbedAudio = false
     @State private var currentURL: URL
     @State private var checkingStream: StreamItem?
     @State private var triedURLs: Set<String> = []
@@ -629,6 +630,10 @@ struct PlayerView: View {
                 addedAddonSubs = true
                 Task { await loadAddonSubtitles(p) }
             }
+            if p.fileLoaded, !checkedDubbedAudio, !p.audioTracks.isEmpty {
+                checkedDubbedAudio = true
+                avoidDubbedDefault(p)
+            }
             if p.fileLoaded, !p.buffering, playingSince == nil {
                 playingSince = Date()
                 app.jellyfin.playbackStarted(meta: request.meta, video: request.video, position: p.position)
@@ -729,6 +734,18 @@ struct PlayerView: View {
         }
     }
 
+    /// Some releases make a dub their default audio (Russian ones often put theirs first)
+    /// and carry the original as another track. If mpv ended up on a dub that isn't a
+    /// language asked for (e.g. the original language couldn't be looked up), switch to
+    /// a track that isn't one.
+    private func avoidDubbedDefault(_ p: MPVController) {
+        guard let current = p.audioTracks.first(where: { $0.id == p.selectedAudio }), current.isDub else { return }
+        let wanted = Set((request.audioLanguages ?? "").split(separator: ",").map { normalizeLang(String($0)) })
+        if let lang = current.lang, wanted.contains(normalizeLang(lang)) { return }
+        guard let original = p.audioTracks.first(where: { !$0.isDub && !$0.isExternal && $0.lang != current.lang }) else { return }
+        p.selectAudio(original.id)
+    }
+
     private func refreshQualityTags(_ p: MPVController) {
         guard p.fileLoaded else { return }
         var tags = p.qualityTags()
@@ -821,6 +838,7 @@ struct PlayerView: View {
                 app.watch.rememberStream(s, metaId: request.meta.id, videoId: request.videoId)
                 currentURL = url
                 addedAddonSubs = false
+                checkedDubbedAudio = false
                 segmentsLoaded = false
                 segments = []
                 thumbs?.shutdown()

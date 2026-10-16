@@ -796,7 +796,9 @@ final class AppState {
         let key = "\(settings.preferOriginalAudio)|\(settings.preferredAudioLanguages)|\(meta.id)"
         if let hit = languageCache[key] { return hit }
         let result = await lookUpAudioLanguages(for: meta)
-        languageCache[key] = result
+        // Only answers are kept: a lookup that failed (Wikidata stalls now and then) is tried
+        // again next time instead of leaving every episode on the file's default track.
+        if result != nil { languageCache[key] = result }
         return result
     }
 
