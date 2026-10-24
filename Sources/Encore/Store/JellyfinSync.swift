@@ -228,6 +228,13 @@ final class JellyfinSync {
         Task { await send("POST", "AIOStreams/PlayedUpTo/\(id)") }
     }
 
+    /// Removing from Continue Watching: the resume point goes back to the start, which takes
+    /// the item out of the profile's Continue Watching without marking it played.
+    func clearResume(imdb: String, type: String, season: Int?, episode: Int?) {
+        guard active, let id = Self.itemId(imdb: imdb, type: type, season: season, episode: episode) else { return }
+        Task { await send("POST", "UserItems/\(id)/UserData", query: userQuery, body: ["PlaybackPositionTicks": 0]) }
+    }
+
     /// Dropping a show is a "dislike" on the series in AIOStreams; picking it back up, a like.
     func setDropped(meta: Meta, dropped: Bool) {
         guard active, let imdb = meta.imdbId, let id = Self.itemId(imdb: imdb, type: meta.type) else { return }
@@ -267,6 +274,7 @@ final class JellyfinSync {
             let isEpisode = ids.episode != nil
             let videoId = isEpisode ? "\(ids.imdb):\(ids.season ?? 1):\(ids.episode!)" : ids.imdb
             if let local = watch.entry(for: ids.imdb), local.updatedAt >= when { continue }
+            if watch.wasRemoved(ids.imdb, since: when) { continue }
             guard let meta = await metaFor?(isEpisode ? "series" : "movie", ids.imdb) else { continue }
             let video = meta.videos.first { $0.id == videoId }
             watch.applyRemoteProgress(
@@ -306,6 +314,7 @@ final class JellyfinSync {
             let isEpisode = ids.episode != nil
             let videoId = isEpisode ? "\(ids.imdb):\(ids.season ?? 1):\(ids.episode!)" : ids.imdb
             if entry.played != true, (watch.entry(for: ids.imdb)?.updatedAt ?? .distantPast) >= at { continue }
+            if entry.played != true, watch.wasRemoved(ids.imdb, since: at) { continue }
             if entry.played == true, watch.progress(videoId: videoId) >= 1,
                (watch.entry(for: ids.imdb)?.updatedAt ?? .distantPast) >= at { continue }
             var meta = metas[ids.imdb]

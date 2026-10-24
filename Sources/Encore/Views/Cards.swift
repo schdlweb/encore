@@ -152,7 +152,7 @@ struct ContinueCard: View {
             if isNew {
                 Button("Hide New Episode") { app.hideNewEpisode(entry) }
             } else {
-                Button("Remove from Continue Watching") { app.watch.removeFromContinue(entry.title.id) }
+                Button("Remove from Continue Watching") { app.removeFromContinue(entry) }
             }
             if entry.season != nil { DropButton(metaId: entry.title.id) }
         }

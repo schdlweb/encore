@@ -67,6 +67,7 @@ final class WatchStore {
         var progress: [String: Double] = [:] // videoId -> fraction watched
         var favorites: [SavedTitle] = []
         var streams: [String: StreamChoice] = [:] // metaId -> last stream played
+        var removed: [String: Date] = [:] // metaId -> when it was removed from Continue Watching
 
         init() {}
         // Every field optional on disk, so files from older versions still load.
@@ -76,6 +77,7 @@ final class WatchStore {
             progress = try c.decodeIfPresent([String: Double].self, forKey: .progress) ?? [:]
             favorites = try c.decodeIfPresent([SavedTitle].self, forKey: .favorites) ?? []
             streams = (try? c.decodeIfPresent([String: StreamChoice].self, forKey: .streams)) ?? [:]
+            removed = (try? c.decodeIfPresent([String: Date].self, forKey: .removed)) ?? [:]
         }
     }
 
@@ -251,6 +253,7 @@ final class WatchStore {
         let isNewVideo = disk.entries[entry.title.id]?.videoId != entry.videoId
         disk.entries[entry.title.id] = entry
         disk.progress[entry.videoId] = entry.progress
+        disk.removed[entry.title.id] = nil
         save()
         // History: once a minute in, and again when it moves to the front (another video).
         if entry.position > 60, isNewVideo || stats.history.first?.videoId != entry.videoId {
@@ -316,6 +319,7 @@ final class WatchStore {
     /// Progress played in another app (AIOStreams' Jellyfin), newer than what's here.
     func applyRemoteProgress(title: SavedTitle, videoId: String, season: Int?, episode: Int?,
                              episodeTitle: String?, thumbnail: String?, position: Double, duration: Double, at: Date) {
+        guard !wasRemoved(title.id, since: at) else { return }
         let entry = WatchEntry(title: title, videoId: videoId, season: season, episode: episode,
                                episodeTitle: episodeTitle, episodeThumbnail: thumbnail,
                                position: position, duration: duration > 0 ? duration : max(position * 1.5, 1), updatedAt: at)
@@ -343,9 +347,16 @@ final class WatchStore {
         save()
     }
 
+    /// Remembers the removal, so a sync doesn't bring back progress made before it.
     func removeFromContinue(_ metaId: String) {
         disk.entries[metaId] = nil
+        disk.removed[metaId] = .now
         save()
+    }
+
+    /// Removed from Continue Watching at or after `date` (and not played here since).
+    func wasRemoved(_ metaId: String, since date: Date) -> Bool {
+        (disk.removed[metaId] ?? .distantPast) >= date
     }
 
     func isFavorite(_ id: String) -> Bool { disk.favorites.contains { $0.id == id } }

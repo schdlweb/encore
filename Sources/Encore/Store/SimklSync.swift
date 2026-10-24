@@ -195,6 +195,7 @@ final class SimklSync {
                 let isEpisode = p.type == "episode"
                 guard let imdb = (isEpisode ? p.show : p.movie)?.ids?.imdb else { continue }
                 if (watch.entry(for: imdb)?.updatedAt ?? .distantPast) >= at { continue }
+                if watch.wasRemoved(imdb, since: at) { continue }
                 guard let m = await meta(isEpisode ? "series" : "movie", imdb) else { continue }
                 let s = p.episode?.season, e = p.episode?.episode ?? p.episode?.number
                 let videoId = isEpisode ? "\(imdb):\(s ?? 1):\(e ?? 1)" : imdb

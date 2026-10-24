@@ -225,6 +225,12 @@ final class AppState {
         simkl.setWatched(meta: meta, videos: episodes, watched: true)
     }
 
+    func removeFromContinue(_ entry: WatchEntry) {
+        watch.removeFromContinue(entry.title.id)
+        let imdb = metaCache[entry.title.id]?.imdbId ?? entry.title.id
+        jellyfin.clearResume(imdb: imdb, type: entry.title.type, season: entry.season, episode: entry.episode)
+    }
+
     func setDropped(_ metaId: String, _ dropped: Bool) {
         watch.setDropped(metaId, dropped)
         if let meta = metaCache[metaId] { jellyfin.setDropped(meta: meta, dropped: dropped) }
