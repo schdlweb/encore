@@ -92,6 +92,21 @@ enum DebugHooks {
             try? await Task.sleep(for: .seconds(1))
             print("[check] hidden=\(app.settings.hiddenCatalogs.sorted()) rows=\(app.rows.count)")
             fflush(stdout)
+        case "thumbidle":
+            // The preview stream closes once idle and reopens for the next hover.
+            guard let pb = app.playback, let p = MPVController.current, p.duration > 0 else { print("[idle] not playing"); return }
+            let gen = ThumbnailGenerator(url: pb.url.absoluteString, headers: pb.stream.requestHeaders, duration: p.duration) { t, _ in
+                print(String(format: "[idle] frame t=%.0f", t)); fflush(stdout)
+            }
+            gen.request(p.duration * 0.3)
+            try? await Task.sleep(for: .seconds(3))
+            print("[idle] after first hover open=\(gen.streamIsOpen)"); fflush(stdout)
+            try? await Task.sleep(for: .seconds(50))
+            print("[idle] after 50 s idle open=\(gen.streamIsOpen)"); fflush(stdout)
+            gen.request(p.duration * 0.7)
+            try? await Task.sleep(for: .seconds(3))
+            print("[idle] after next hover open=\(gen.streamIsOpen)"); fflush(stdout)
+            gen.shutdown()
         case "thumbreal":
             // Previews against the stream that's playing: time each hover to its frame.
             guard let pb = app.playback, let p = MPVController.current, p.duration > 0 else { print("[thumb] not playing"); return }

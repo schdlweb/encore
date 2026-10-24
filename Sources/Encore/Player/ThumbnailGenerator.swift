@@ -15,6 +15,11 @@ import UniformTypeIdentifiers
 /// All FFmpeg calls happen on one serial queue. Requests coalesce: while a frame is being
 /// made only the latest hover is kept. Between requests it fills the timeline in the
 /// background, coarse to fine, so a hover can show a close frame at once.
+///
+/// Once there's nothing left to make it lets go of the stream (like Infuse's preview
+/// generator, which drops its decoder after a while unused) and reopens it on the next
+/// hover: debrid services cap connections per account, and this one would otherwise stay
+/// open for the whole episode. Frames already made stay cached.
 final class ThumbnailGenerator: @unchecked Sendable {
     static let width = 480 // 240 pt on a Retina screen
 
@@ -44,6 +49,13 @@ final class ThumbnailGenerator: @unchecked Sendable {
     private var lastRequest: Double?
     private var sweeping = false
     private let deliver: @MainActor (Double, CGImage) -> Void
+    private let url: String
+    private let headers: [String: String]
+    /// How long the stream stays open with nothing to do.
+    private static let idleTimeout: TimeInterval = 45
+    private var idleClose: DispatchWorkItem?
+    /// Closed for being idle (as opposed to failed or shut down): reopened on demand.
+    private var closedForIdle = false
 
     /// `deliver` receives (bucketed time, image) on the main actor.
     init(url: String, headers: [String: String], duration: Double, deliver: @escaping @MainActor (Double, CGImage) -> Void) {
@@ -51,7 +63,9 @@ final class ThumbnailGenerator: @unchecked Sendable {
         bucket = duration > 7200 ? 3 : 2
         self.duration = duration
         self.deliver = deliver
-        queue.async { self.open(url: url, headers: headers) }
+        self.url = url
+        self.headers = headers
+        queue.async { self.open() }
     }
 
     func bucketed(_ t: Double) -> Double { (t / bucket).rounded() * bucket }
@@ -123,6 +137,7 @@ final class ThumbnailGenerator: @unchecked Sendable {
                     if seen.insert(Int(t * 10)).inserted { self.sweep.append(t) }
                 }
             }
+            self.reopenIfIdle()
             self.pump()
         }
     }
@@ -143,9 +158,13 @@ final class ThumbnailGenerator: @unchecked Sendable {
                 return
             }
             self.pending = t
+            self.reopenIfIdle()
             self.pump()
         }
     }
+
+    /// Whether the stream is open right now (for the debug hooks).
+    var streamIsOpen: Bool { queue.sync { format != nil } }
 
     func shutdown() {
         queue.async {
@@ -158,7 +177,7 @@ final class ThumbnailGenerator: @unchecked Sendable {
 
     // MARK: Queue-only
 
-    private func open(url: String, headers: [String: String]) {
+    private func open() {
         var opts: OpaquePointer?
         if !headers.isEmpty {
             av_dict_set(&opts, "headers", headers.map { "\($0.key): \($0.value)\r\n" }.joined(), 0)
@@ -204,12 +223,38 @@ final class ThumbnailGenerator: @unchecked Sendable {
     }
 
     private func close() {
+        idleClose?.cancel()
+        idleClose = nil
+        ready = false
         if scaler != nil { sws_free_context(&scaler) }
         scaler = nil
         if decoded != nil { av_frame_free(&decoded) }
         if packet != nil { av_packet_free(&packet) }
         if decoder != nil { avcodec_free_context(&decoder) }
         if format != nil { avformat_close_input(&format) }
+        decoder = nil
+        packet = nil
+        decoded = nil
+        format = nil
+    }
+
+    /// Nothing to make: close the stream if that stays true for `idleTimeout`.
+    private func scheduleIdleClose() {
+        idleClose?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.ready, !self.busy, self.pending == nil, self.ahead.isEmpty, self.sweep.isEmpty else { return }
+            self.close()
+            self.closedForIdle = true
+        }
+        idleClose = work
+        queue.asyncAfter(deadline: .now() + Self.idleTimeout, execute: work)
+    }
+
+    private func reopenIfIdle() {
+        idleClose?.cancel()
+        guard closedForIdle, !failed else { return }
+        closedForIdle = false
+        open()
     }
 
     private func pump() {
@@ -226,8 +271,10 @@ final class ThumbnailGenerator: @unchecked Sendable {
             t = next
             background = true
         } else {
+            scheduleIdleClose()
             return
         }
+        idleClose?.cancel()
         busy = true
         defer { busy = false }
         if let (img, at) = frame(at: t), let jpeg = Self.compress(img) {
@@ -242,6 +289,8 @@ final class ThumbnailGenerator: @unchecked Sendable {
             // The background fill is paced (it ran the thread flat out alongside playback);
             // a hover arriving meanwhile is picked up at once by request().
             queue.asyncAfter(deadline: .now() + (background ? 0.35 : 0.05)) { self.pump() }
+        } else {
+            scheduleIdleClose()
         }
     }
 
