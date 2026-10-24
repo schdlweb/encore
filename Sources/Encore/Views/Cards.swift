@@ -184,6 +184,8 @@ struct EpisodeCard: View {
     let isLoading: Bool
     let action: () -> Void
 
+    private var watched: Bool { progress > 0.92 }
+
     private var placeholderLabel: String {
         guard let e = video.episode else { return "" }
         return video.season == 0 ? "SP \(e)" : "E\(e)"
@@ -198,7 +200,8 @@ struct EpisodeCard: View {
                     EpisodePlaceholder(art: fallbackImage, label: placeholderLabel, upcoming: (video.released ?? .distantPast) > .now)
                     RemoteImage(url: video.thumbnail ?? stillFallback, maxPixel: 640, fallbackURL: video.thumbnail == nil ? nil : stillFallback, showsEmpty: false)
                         .frame(width: 280, height: 158)
-                    if progress > 0 {
+                    // Partly watched: a progress bar. Watched: just the checkmark.
+                    if progress > 0, progress <= 0.92 {
                         LinearGradient(colors: [.clear, .black.opacity(0.6)], startPoint: .center, endPoint: .bottom)
                         Capsule().fill(.white.opacity(0.3)).frame(height: 4)
                             .overlay(alignment: .leading) {
@@ -206,10 +209,15 @@ struct EpisodeCard: View {
                             }
                             .padding(12)
                     }
-                    if progress > 0.92 {
-                        Image(systemName: "checkmark.circle.fill")
-                            .font(.system(size: 18))
-                            .foregroundStyle(.white, .black.opacity(0.4))
+                    if watched {
+                        // Watched: the still dims a little and a "Watched" tag sits in the corner.
+                        Color.black.opacity(0.2)
+                        Label("Watched", systemImage: "checkmark")
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundStyle(.black)
+                            .padding(.horizontal, 8).padding(.vertical, 4)
+                            .background(Capsule().fill(.white))
+                            .shadow(color: .black.opacity(0.3), radius: 4, y: 1)
                             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
                             .padding(10)
                     }
@@ -225,7 +233,7 @@ struct EpisodeCard: View {
                         .foregroundStyle(Theme.textTertiary)
                     Text(video.title.isEmpty ? "Episode \(video.episode ?? 0)" : video.title)
                         .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(Theme.textPrimary)
+                        .foregroundStyle(watched ? Theme.textSecondary : Theme.textPrimary)
                         .lineLimit(1)
                     if let facts = episodeFacts(video, runtime: runtime) {
                         Text(facts)
@@ -298,10 +306,11 @@ extension String {
     func ifEmpty(_ fallback: String) -> String { isEmpty ? fallback : self }
 }
 
-/// "24m · Jan 17, 2018", or "24m · Airs Fri, Oct 17" for an episode that hasn't aired.
+/// "24m · Jan 17, 2018", or "Airs Fri, Oct 17" for an episode that hasn't aired (its
+/// length is only a guess until then, so it's left out).
 func episodeFacts(_ video: Video, runtime: Int?) -> String? {
     var parts: [String] = []
-    if let runtime, runtime > 0 { parts.append(runtime >= 60 ? "\(runtime / 60)h \(runtime % 60)m" : "\(runtime)m") }
+    if let runtime, runtime > 0, (video.released ?? .distantPast) <= .now { parts.append(runtime >= 60 ? "\(runtime / 60)h \(runtime % 60)m" : "\(runtime)m") }
     if let date = video.released {
         let f = DateFormatter()
         if date > .now {

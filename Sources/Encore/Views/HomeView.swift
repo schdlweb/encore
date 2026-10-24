@@ -102,7 +102,7 @@ struct UpcomingCard: View {
                     RemoteImage(url: item.meta.background ?? item.video.thumbnail ?? item.meta.poster, maxPixel: 600)
                         .frame(width: 260, height: 146)
                     LinearGradient(colors: [.clear, .black.opacity(0.65)], startPoint: .center, endPoint: .bottom)
-                    Text([airs, item.runtime.map { $0 >= 60 ? "\($0 / 60)h \($0 % 60)m" : "\($0)m" }].compactMap { $0 }.joined(separator: " · "))
+                    Text([airs, aired ? item.runtime.map { $0 >= 60 ? "\($0 / 60)h \($0 % 60)m" : "\($0)m" } : nil].compactMap { $0 }.joined(separator: " · "))
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(.white)
                         .padding(.horizontal, 8).padding(.vertical, 4)
@@ -128,6 +128,9 @@ struct UpcomingCard: View {
         let label = v.season.flatMap { s in v.episode.map { "S\(s) • E\($0)" } } ?? ""
         return [label, v.title.isEmpty ? nil : v.title].compactMap { $0 }.joined(separator: " - ")
     }
+
+    /// Out already (it can air while the row is on screen): only then is its length known.
+    private var aired: Bool { (item.video.released ?? .distantFuture) <= .now }
 
     /// "Today", "Tomorrow", "Friday" within a week, else "Oct 24".
     private var airs: String {
