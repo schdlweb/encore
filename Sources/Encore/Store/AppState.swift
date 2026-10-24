@@ -231,6 +231,11 @@ final class AppState {
         jellyfin.clearResume(imdb: imdb, type: entry.title.type, season: entry.season, episode: entry.episode)
     }
 
+    /// Subtitles were turned off for this title (and are on by default).
+    func trackChoiceSubtitlesOff(_ metaId: String) -> Bool {
+        watch.trackChoice(for: metaId)?.subtitles == TrackChoice.off
+    }
+
     func setDropped(_ metaId: String, _ dropped: Bool) {
         watch.setDropped(metaId, dropped)
         if let meta = metaCache[metaId] { jellyfin.setDropped(meta: meta, dropped: dropped) }
@@ -812,15 +817,7 @@ final class AppState {
         let manual = settings.preferredAudioLanguages.trimmingCharacters(in: .whitespaces)
         guard settings.preferOriginalAudio else { return manual.isEmpty ? nil : manual }
         guard let code = await DiscoveryService.originalLanguage(of: meta) else { return manual.isEmpty ? nil : manual }
-        var codes = [code]
-        if let two = Locale.LanguageCode(code).identifier(.alpha2) { codes.append(two) }
-        switch code {
-        case "chi", "zho": codes += ["zho", "chi", "zh", "cmn"]
-        case "fil", "tgl": codes += ["fil", "tgl", "tl"]
-        case "fre", "fra": codes += ["fra", "fre"]
-        case "ger", "deu": codes += ["deu", "ger"]
-        default: break
-        }
+        var codes = languageCodes(code)
         if !manual.isEmpty { codes.append(manual) }
         var seen = Set<String>()
         return codes.filter { seen.insert($0).inserted }.joined(separator: ",")
@@ -893,4 +890,25 @@ func formatClock(_ seconds: Double) -> String {
     return s >= 3600
         ? String(format: "%d:%02d:%02d", s / 3600, (s % 3600) / 60, s % 60)
         : String(format: "%d:%02d", s / 60, s % 60)
+}
+
+/// The ways files tag one language (ISO 639-2, its two-letter code, other spellings), for
+/// mpv's `alang`.
+func languageCodes(_ code: String) -> [String] {
+    var codes = [code]
+    if let two = Locale.LanguageCode(code).identifier(.alpha2) { codes.append(two) }
+    switch code {
+    case "chi", "zho": codes += ["zho", "chi", "zh", "cmn"]
+    case "fil", "tgl": codes += ["fil", "tgl", "tl"]
+    case "fre", "fra": codes += ["fra", "fre"]
+    case "ger", "deu": codes += ["deu", "ger"]
+    case "dut", "nld": codes += ["nld", "dut"]
+    case "per", "fas": codes += ["fas", "per"]
+    case "rum", "ron": codes += ["ron", "rum"]
+    case "gre", "ell": codes += ["ell", "gre"]
+    case "cze", "ces": codes += ["ces", "cze"]
+    default: break
+    }
+    var seen = Set<String>()
+    return codes.filter { seen.insert($0).inserted }
 }

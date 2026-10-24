@@ -57,6 +57,17 @@ struct StreamChoice: Codable, Hashable {
     }
 }
 
+/// Audio and subtitle languages picked for a movie or show that differ from what Encore
+/// picks by itself, so every episode (and every later viewing) starts with them.
+struct TrackChoice: Codable, Hashable {
+    /// Audio language (ISO 639-2) picked instead of the original.
+    var audio: String?
+    /// Subtitle language (ISO 639-2), or `TrackChoice.off`.
+    var subtitles: String?
+
+    static let off = "off"
+}
+
 /// Watch progress, finished episodes and the user's library, saved as JSON in
 /// Application Support.
 @Observable
@@ -68,6 +79,7 @@ final class WatchStore {
         var favorites: [SavedTitle] = []
         var streams: [String: StreamChoice] = [:] // metaId -> last stream played
         var removed: [String: Date] = [:] // metaId -> when it was removed from Continue Watching
+        var tracks: [String: TrackChoice] = [:] // metaId -> languages picked for it
 
         init() {}
         // Every field optional on disk, so files from older versions still load.
@@ -78,6 +90,7 @@ final class WatchStore {
             favorites = try c.decodeIfPresent([SavedTitle].self, forKey: .favorites) ?? []
             streams = (try? c.decodeIfPresent([String: StreamChoice].self, forKey: .streams)) ?? [:]
             removed = (try? c.decodeIfPresent([String: Date].self, forKey: .removed)) ?? [:]
+            tracks = (try? c.decodeIfPresent([String: TrackChoice].self, forKey: .tracks)) ?? [:]
         }
     }
 
@@ -357,6 +370,27 @@ final class WatchStore {
     /// Removed from Continue Watching at or after `date` (and not played here since).
     func wasRemoved(_ metaId: String, since date: Date) -> Bool {
         (disk.removed[metaId] ?? .distantPast) >= date
+    }
+
+    func trackChoice(for metaId: String) -> TrackChoice? { disk.tracks[metaId] }
+
+    /// nil forgets the audio choice (back to the title's original language).
+    func setAudioChoice(_ lang: String?, metaId: String) {
+        updateTracks(metaId) { $0.audio = lang }
+    }
+
+    /// nil forgets the subtitle choice (back to the subtitle settings).
+    func setSubtitleChoice(_ value: String?, metaId: String) {
+        updateTracks(metaId) { $0.subtitles = value }
+    }
+
+    private func updateTracks(_ metaId: String, _ change: (inout TrackChoice) -> Void) {
+        var choice = disk.tracks[metaId] ?? TrackChoice()
+        change(&choice)
+        let new: TrackChoice? = choice.audio == nil && choice.subtitles == nil ? nil : choice
+        guard disk.tracks[metaId] != new else { return }
+        disk.tracks[metaId] = new
+        save()
     }
 
     func isFavorite(_ id: String) -> Bool { disk.favorites.contains { $0.id == id } }

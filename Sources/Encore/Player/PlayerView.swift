@@ -106,6 +106,14 @@ struct PlayerView: View {
         // No aspect-ratio lock on the window (macOS applies it to full screen too, which
         // left the video stretched to the top and bottom edges only). Instead, when a
         // manual resize ends, the window snaps back to the video's shape.
+        .onReceive(NotificationCenter.default.publisher(for: DebugHooks.pickTrack)) { n in
+            // Test runs: pick a track the way the audio/subtitle menus do.
+            guard let p = player, let kind = n.userInfo?["kind"] as? String, let lang = n.userInfo?["lang"] as? String else { return }
+            let tracks = kind == "audio" ? p.audioTracks : p.subtitleTracks
+            let id = lang == "off" ? nil : tracks.first { $0.lang.map(normalizeLang) == normalizeLang(lang) }?.id
+            if kind == "audio" { if let id { p.selectAudio(id); rememberAudio(id, p) } }
+            else { p.selectSubtitle(id); rememberSubtitles(id, p) }
+        }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didEndLiveResizeNotification)) { n in
             guard inWindow, !fullScreenTransition, let w = n.object as? NSWindow, w === hostWindow,
                   !w.styleMask.contains(.fullScreen), let size = videoShape else { return }
@@ -354,10 +362,10 @@ struct PlayerView: View {
                 HStack(spacing: 12) {
                     Spacer()
                     SubtitleMenu(tracks: p.subtitleTracks, selected: p.selectedSubtitle,
-                                 select: { p.selectSubtitle($0) }, setDelay: { p.setSubtitleDelay($0) })
+                                 select: { p.selectSubtitle($0); rememberSubtitles($0, p) }, setDelay: { p.setSubtitleDelay($0) })
                         .equatable()
                     AudioMenu(tracks: p.audioTracks, selected: p.selectedAudio,
-                              select: { p.selectAudio($0) }, setDelay: { p.setAudioDelay($0) })
+                              select: { p.selectAudio($0); rememberAudio($0, p) }, setDelay: { p.setAudioDelay($0) })
                         .equatable()
                     GearMenu(speed: p.speed, sources: request.alternatives.filter(\.isPlayable), current: stream,
                              showInfo: showInfo, setSpeed: { p.setSpeed($0) },
@@ -565,7 +573,7 @@ struct PlayerView: View {
             )
         )
         p.load(url: currentURL.absoluteString, headers: stream.requestHeaders, startAt: request.startAt,
-               audioLanguages: request.audioLanguages)
+               audioLanguages: audioLanguages)
     }
 
     private func teardown() {
@@ -740,7 +748,7 @@ struct PlayerView: View {
     /// a track that isn't one.
     private func avoidDubbedDefault(_ p: MPVController) {
         guard let current = p.audioTracks.first(where: { $0.id == p.selectedAudio }), current.isDub else { return }
-        let wanted = Set((request.audioLanguages ?? "").split(separator: ",").map { normalizeLang(String($0)) })
+        let wanted = Set((audioLanguages ?? "").split(separator: ",").map { normalizeLang(String($0)) })
         if let lang = current.lang, wanted.contains(normalizeLang(lang)) { return }
         guard let original = p.audioTracks.first(where: { !$0.isDub && !$0.isExternal && $0.lang != current.lang }) else { return }
         p.selectAudio(original.id)
@@ -802,8 +810,9 @@ struct PlayerView: View {
     private func loadAddonSubtitles(_ p: MPVController) async {
         guard app.manifest?.supports("subtitles") == true, let client = app.client else { return }
         guard let subs = try? await client.subtitles(type: request.meta.type, videoId: request.videoId), !subs.isEmpty else { return }
-        let prefs = app.settings.preferredSubtitleLanguages
-            .split(separator: ",").map { normalizeLang(String($0).trimmingCharacters(in: .whitespaces)) }
+        var prefs = subtitlePrefs
+        let saved = savedSubtitleLanguage
+        if let saved, !prefs.contains(saved) { prefs.insert(saved, at: 0) }
         let wanted = prefs.isEmpty ? subs : subs.filter { prefs.contains(normalizeLang($0.lang)) }
         let embeddedPreferred = p.subtitleTracks.contains { t in t.lang.map { prefs.contains(normalizeLang($0)) } ?? false }
         for (i, s) in wanted.prefix(8).enumerated() {
@@ -811,6 +820,16 @@ struct PlayerView: View {
             let name = Locale.current.localizedString(forLanguageCode: lang) ?? s.lang
             p.addSubtitle(url: s.url, title: "\(name) \(i + 1)", lang: lang)
         }
+        // Subtitles picked for this title that the file itself doesn't have: the addon's.
+        if let saved {
+            guard !p.subtitleTracks.contains(where: { !$0.isExternal && $0.lang.map(normalizeLang) == saved }) else { return }
+            try? await Task.sleep(for: .seconds(2))
+            if let track = p.subtitleTracks.first(where: { $0.isExternal && $0.lang.map(normalizeLang) == saved }) {
+                p.selectSubtitle(track.id)
+            }
+            return
+        }
+        if app.trackChoiceSubtitlesOff(request.meta.id) { return }
         // If the file had nothing in a preferred language, turn the first addon track on.
         if app.settings.subtitlesOnByDefault, !embeddedPreferred, p.selectedSubtitle == nil, !wanted.isEmpty {
             try? await Task.sleep(for: .seconds(2))
@@ -853,7 +872,7 @@ struct PlayerView: View {
                 subtitlesRefined = false
                 playingSince = nil
                 p.load(url: url.absoluteString, headers: s.requestHeaders, startAt: resumeAt,
-                       audioLanguages: request.audioLanguages)
+                       audioLanguages: audioLanguages)
             case .failed(let reason):
                 p.errorMessage = "That stream didn't work: \(reason)"
             }
@@ -963,15 +982,78 @@ struct PlayerView: View {
         }
     }
 
+    // MARK: Remembered languages
+
+    /// mpv `alang` for this title: a language picked for it before, then its original.
+    private var audioLanguages: String? {
+        guard let saved = app.watch.trackChoice(for: request.meta.id)?.audio else { return request.audioLanguages }
+        return (languageCodes(saved) + [request.audioLanguages].compactMap { $0 }).joined(separator: ",")
+    }
+
+    private var subtitlePrefs: [String] {
+        app.settings.preferredSubtitleLanguages.split(separator: ",")
+            .map { normalizeLang(String($0).trimmingCharacters(in: .whitespaces)) }
+            .filter { !$0.isEmpty }
+    }
+
+    /// The subtitle language picked for this title, if one was (not "off").
+    private var savedSubtitleLanguage: String? {
+        guard let s = app.watch.trackChoice(for: request.meta.id)?.subtitles, s != TrackChoice.off else { return nil }
+        return s
+    }
+
+    /// Signs & Songs, forced or commentary subtitles rather than the full dialogue.
+    private static func isPartialSubtitle(_ t: MediaTrack) -> Bool {
+        t.isForced || (t.title ?? "").range(of: #"(?i)sign|song|forced|commentary"#, options: .regularExpression) != nil
+    }
+
+    /// Audio in a language other than the title's original is remembered for this movie or
+    /// show; going back to the original forgets it.
+    private func rememberAudio(_ id: Int, _ p: MPVController) {
+        guard let lang = p.audioTracks.first(where: { $0.id == id })?.lang else { return }
+        let code = normalizeLang(lang)
+        var original = Set((request.audioLanguages ?? "").split(separator: ",").map { normalizeLang(String($0)) })
+        // Original unknown: the file's default track stands in for it.
+        if original.isEmpty, let def = p.audioTracks.first(where: \.isDefault)?.lang ?? p.audioTracks.first?.lang {
+            original = [normalizeLang(def)]
+        }
+        app.watch.setAudioChoice(original.contains(code) ? nil : code, metaId: request.meta.id)
+    }
+
+    /// Subtitles other than the usual (another language, or off when they're normally on)
+    /// are remembered for this movie or show; going back to the usual forgets it.
+    private func rememberSubtitles(_ id: Int?, _ p: MPVController) {
+        let usual = app.settings.subtitlesOnByDefault ? subtitlePrefs.first : nil
+        let value: String?
+        if let id {
+            guard let lang = p.subtitleTracks.first(where: { $0.id == id })?.lang else { return }
+            let code = normalizeLang(lang)
+            value = code == usual ? nil : code
+        } else {
+            value = usual == nil ? nil : TrackChoice.off
+        }
+        app.watch.setSubtitleChoice(value, metaId: request.meta.id)
+    }
+
     /// Anime releases often flag a "Signs & Songs" track as the English default; prefer
     /// the full-dialogue English track when there is one.
     private func refineSubtitleChoice(_ p: MPVController) {
-        guard app.settings.subtitlesOnByDefault else { return }
-        let prefs = app.settings.preferredSubtitleLanguages.split(separator: ",")
-            .map { normalizeLang(String($0).trimmingCharacters(in: .whitespaces)) }
-        func partial(_ t: MediaTrack) -> Bool {
-            t.isForced || (t.title ?? "").range(of: #"(?i)sign|song|forced|commentary"#, options: .regularExpression) != nil
+        // Subtitles picked for this title before win over the settings.
+        if app.trackChoiceSubtitlesOff(request.meta.id) {
+            p.selectSubtitle(nil)
+            return
         }
+        if let saved = savedSubtitleLanguage {
+            let matches = p.subtitleTracks.filter { $0.lang.map(normalizeLang) == saved }
+            // Not in the file: the addon's subtitles are tried once they're added.
+            if let pick = matches.first(where: { !Self.isPartialSubtitle($0) }) ?? matches.first {
+                p.selectSubtitle(pick.id)
+            }
+            return
+        }
+        guard app.settings.subtitlesOnByDefault else { return }
+        let prefs = subtitlePrefs
+        let partial = Self.isPartialSubtitle
         let wanted = p.subtitleTracks.filter { t in t.lang.map { prefs.contains(normalizeLang($0)) } ?? false }
         let current = p.subtitleTracks.first { $0.id == p.selectedSubtitle }
         if let full = wanted.first(where: { !partial($0) }), current == nil || partial(current!) {

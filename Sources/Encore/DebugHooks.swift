@@ -8,6 +8,9 @@ import SwiftUI
 ///   ENCORE_ROUTE=tab:search | detail:<type>:<id> | play:<type>:<id>[:<videoId>]
 @MainActor
 enum DebugHooks {
+    /// Posted by the `pick:<audio|sub>:<lang|off>` route; the player picks that track.
+    static let pickTrack = Notification.Name("EncoreDebugPickTrack")
+
     static func install(app: AppState) {
         let env = ProcessInfo.processInfo.environment
         if let dir = env["ENCORE_SNAPSHOT_DIR"] {
@@ -92,6 +95,16 @@ enum DebugHooks {
             try? await Task.sleep(for: .seconds(1))
             print("[check] hidden=\(app.settings.hiddenCatalogs.sorted()) rows=\(app.rows.count)")
             fflush(stdout)
+        case "pick" where parts.count >= 3:
+            NotificationCenter.default.post(name: pickTrack, object: nil, userInfo: ["kind": parts[1] == "sub" ? "sub" : "audio", "lang": parts[2]])
+            try? await Task.sleep(for: .seconds(1))
+            fallthrough
+        case "tracks":
+            guard let p = MPVController.current, let pb = app.playback else { print("[tracks] not playing"); return }
+            let a = p.audioTracks.first { $0.id == p.selectedAudio }?.lang ?? "-"
+            let s = p.subtitleTracks.first { $0.id == p.selectedSubtitle }?.lang ?? "off"
+            let saved = app.watch.trackChoice(for: pb.meta.id)
+            print("[tracks] \(pb.videoId) audio=\(a) subs=\(s) saved.audio=\(saved?.audio ?? "-") saved.subs=\(saved?.subtitles ?? "-")"); fflush(stdout)
         case "thumbidle":
             // The preview stream closes once idle and reopens for the next hover.
             guard let pb = app.playback, let p = MPVController.current, p.duration > 0 else { print("[idle] not playing"); return }
