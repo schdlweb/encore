@@ -808,14 +808,15 @@ struct PlayerView: View {
     }
 
     private func loadAddonSubtitles(_ p: MPVController) async {
-        guard app.manifest?.supports("subtitles") == true, let client = app.client else { return }
+        let limit = app.settings.addonSubtitleLimit
+        guard limit > 0, app.manifest?.supports("subtitles") == true, let client = app.client else { return }
         guard let subs = try? await client.subtitles(type: request.meta.type, videoId: request.videoId), !subs.isEmpty else { return }
         var prefs = subtitlePrefs
         let saved = savedSubtitleLanguage
         if let saved, !prefs.contains(saved) { prefs.insert(saved, at: 0) }
         let wanted = prefs.isEmpty ? subs : subs.filter { prefs.contains(normalizeLang($0.lang)) }
         let embeddedPreferred = p.subtitleTracks.contains { t in t.lang.map { prefs.contains(normalizeLang($0)) } ?? false }
-        for (i, s) in wanted.prefix(8).enumerated() {
+        for (i, s) in wanted.prefix(limit).enumerated() {
             let lang = normalizeLang(s.lang)
             let name = Locale.current.localizedString(forLanguageCode: lang) ?? s.lang
             p.addSubtitle(url: s.url, title: "\(name) \(i + 1)", lang: lang)

@@ -63,6 +63,8 @@ final class Settings {
     var preferredSubtitleLanguages: String { didSet { d.set(preferredSubtitleLanguages, forKey: "slang") } }
     var subtitlesOnByDefault: Bool { didSet { d.set(subtitlesOnByDefault, forKey: "subsOn") } }
     var subtitleSize: SubtitleSize { didSet { d.set(subtitleSize.rawValue, forKey: "subSize") } }
+    /// How many of the addon's subtitles to add per video: 0 = none, `Int.max` = all.
+    var addonSubtitleLimit: Int { didSet { d.set(addonSubtitleLimit, forKey: "addonSubLimit") } }
     var autoplayNext: Bool { didSet { d.set(autoplayNext, forKey: "autoplayNext") } }
     var streamBuffer: StreamBuffer { didSet { d.set(streamBuffer.rawValue, forKey: "streamBuffer") } }
     var skipInterval: Int { didSet { d.set(skipInterval, forKey: "skipInterval") } }
@@ -96,6 +98,7 @@ final class Settings {
         preferredSubtitleLanguages = d.string(forKey: "slang") ?? "en,eng"
         subtitlesOnByDefault = d.object(forKey: "subsOn") as? Bool ?? true
         subtitleSize = SubtitleSize(rawValue: d.double(forKey: "subSize")) ?? .medium
+        addonSubtitleLimit = d.object(forKey: "addonSubLimit") as? Int ?? 8
         autoplayNext = d.object(forKey: "autoplayNext") as? Bool ?? true
         skipInterval = d.object(forKey: "skipInterval") as? Int ?? 10
         streamBuffer = StreamBuffer(rawValue: d.integer(forKey: "streamBuffer")) ?? .memory

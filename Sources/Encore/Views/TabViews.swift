@@ -253,6 +253,12 @@ struct SettingsView: View {
                     Picker("Size", selection: $s.subtitleSize) {
                         ForEach(SubtitleSize.allCases) { Text($0.label).tag($0) }
                     }
+                    Picker("Subtitles from your addon", selection: $s.addonSubtitleLimit) {
+                        Text("Off").tag(0)
+                        ForEach([4, 8, 16], id: \.self) { Text("Up to \($0)").tag($0) }
+                        Text("All").tag(Int.max)
+                    }
+                    note("Extra subtitle tracks from your addon (such as OpenSubtitles through AIOStreams), in your preferred languages.")
                 }
 
                 card("Video & Playback") {
