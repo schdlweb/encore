@@ -124,7 +124,7 @@ intact. Progress is also saved when you quit with something playing.
 
 Needs a clean working tree on `main`. It runs the tests, bumps `VERSION`, packages, commits
 just the version bump, tags, pushes and creates the GitHub release. The packaged app's
-minimum macOS is set to what the bundled libraries need.
+minimum macOS is set to the major version the bundled libraries were built for.
 
 ## Testing
 

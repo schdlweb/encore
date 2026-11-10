@@ -19,6 +19,10 @@ python3 -I scripts/bundle-dylibs.py "$STAGE/Encore.app"
 MINOS=$(for lib in "$STAGE/Encore.app/Contents/Frameworks/"*.dylib; do
   otool -l "$lib" | awk '/LC_BUILD_VERSION/ {b=1} b && $1 == "minos" {print $2; b=0}'
 done | sort -t. -k1,1n -k2,2n -k3,3n | tail -1)
+# Only the major version: Homebrew builds a library for the macOS it was bottled on
+# (27.0, or 27.2 for one rebuilt since), but a library built on 27.2 still loads on 27.0.
+# Requiring the exact point release would lock out Macs the app runs fine on.
+[[ -n $MINOS ]] && MINOS="${MINOS%%.*}.0"
 if [[ -n $MINOS ]]; then
   /usr/libexec/PlistBuddy -c "Set :LSMinimumSystemVersion $MINOS" "$STAGE/Encore.app/Contents/Info.plist"
   echo "Bundled libraries need macOS $MINOS or later"
