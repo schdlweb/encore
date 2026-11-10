@@ -28,7 +28,7 @@ final class DownloadManager {
 
     func download(_ stream: StreamItem, title: String) {
         let name = Self.fileName(for: stream, title: title)
-        var item = Item(name: name)
+        let item = Item(name: name)
         let id = item.id
         items.insert(item, at: 0)
         Task {
@@ -42,7 +42,6 @@ final class DownloadManager {
                 let task = session.downloadTask(with: req)
                 task.taskDescription = id.uuidString
                 tasks[id] = task
-                item.state = .downloading
                 update(id) { $0.state = .downloading }
                 task.resume()
             }
@@ -70,7 +69,11 @@ final class DownloadManager {
 
     fileprivate func finished(_ id: UUID, at file: URL) {
         tasks[id] = nil
-        guard let name = items.first(where: { $0.id == id })?.name else { return }
+        // Dismissed while it was finishing: nothing to keep.
+        guard let name = items.first(where: { $0.id == id })?.name else {
+            try? FileManager.default.removeItem(at: file)
+            return
+        }
         let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask)[0]
         var dest = downloads.appendingPathComponent(name)
         var n = 2
@@ -105,7 +108,8 @@ final class DownloadManager {
         return name
     }
 
-    private final class Delegate: NSObject, URLSessionDownloadDelegate {
+    private final class Delegate: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
+        /// Only touched on the main actor.
         weak var owner: DownloadManager?
         private var lastReport: [UUID: Date] = [:]
         private let lock = NSLock()

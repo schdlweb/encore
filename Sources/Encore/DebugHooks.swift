@@ -78,7 +78,7 @@ enum DebugHooks {
             while app.playback == nil, app.playStatus?.phase != .failed, Date().timeIntervalSince(start) < 60 {
                 try? await Task.sleep(for: .milliseconds(50))
             }
-            print(String(format: "[play] %@ ready after %.2fs", videoId ?? metaId, Date().timeIntervalSince(start)))
+            print(String(format: "[play] %@ ready after %.2fs", videoId.isEmpty ? metaId : videoId, Date().timeIntervalSince(start)))
             fflush(stdout)
         case "checkboxes":
             // Clicks the first few checkboxes in the frontmost window and reports what got hidden.
@@ -290,7 +290,9 @@ enum DebugHooks {
         case "updateinstall":
             // Installs the zip served at 127.0.0.1:8799 over this copy of the app.
             print("[update] installing over \(Bundle.main.bundleURL.path)"); fflush(stdout)
-            await app.updater.install(.init(version: "9.9.9", notes: "", zip: URL(string: "http://127.0.0.1:8799/Encore.zip")!))
+            // ENCORE_UPDATE_SHA256: the zip's checksum (without it the install is refused).
+            await app.updater.install(.init(version: "9.9.9", notes: "", zip: URL(string: "http://127.0.0.1:8799/Encore.zip")!,
+                                            sha256: ProcessInfo.processInfo.environment["ENCORE_UPDATE_SHA256"]?.lowercased()))
             print("[update] state=\(app.updater.state)"); fflush(stdout)
         case "updatecheck":
             await app.updater.check(userInitiated: true)

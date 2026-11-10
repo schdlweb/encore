@@ -51,27 +51,36 @@ final class ImagePipeline: @unchecked Sendable {
         let k = key(url, maxPixel)
         if let hit = cache(for: maxPixel).object(forKey: k as NSString) { return hit }
 
-        lock.lock()
-        if let running = inFlight[k] {
-            lock.unlock()
-            return await running.value
+        let (task, started) = joinOrStart(k) { [session] in
+            Task.detached(priority: .userInitiated) { () -> NSImage? in
+                guard let (data, _) = try? await session.data(from: url) else { return nil }
+                return Self.downsample(data, maxPixel: maxPixel)
+            }
         }
-        let task = Task.detached(priority: .userInitiated) { [session] () -> NSImage? in
-            guard let (data, _) = try? await session.data(from: url) else { return nil }
-            return Self.downsample(data, maxPixel: maxPixel)
-        }
-        inFlight[k] = task
-        lock.unlock()
-
         let img = await task.value
-        lock.lock()
-        inFlight[k] = nil
-        lock.unlock()
+        guard started else { return img }
+        finished(k)
         if let img {
             let cost = Int(img.size.width * img.size.height * 4)
             cache(for: maxPixel).setObject(img, forKey: k as NSString, cost: cost)
         }
         return img
+    }
+
+    /// The request already running for this image, or a new one (true: the caller started it).
+    private func joinOrStart(_ k: String, _ make: () -> Task<NSImage?, Never>) -> (Task<NSImage?, Never>, Bool) {
+        lock.lock()
+        defer { lock.unlock() }
+        if let running = inFlight[k] { return (running, false) }
+        let task = make()
+        inFlight[k] = task
+        return (task, true)
+    }
+
+    private func finished(_ k: String) {
+        lock.lock()
+        inFlight[k] = nil
+        lock.unlock()
     }
 
     private static func downsample(_ data: Data, maxPixel: Int) -> NSImage? {

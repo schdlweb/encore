@@ -82,37 +82,42 @@ final class WatchStore {
         var tracks: [String: TrackChoice] = [:] // metaId -> languages picked for it
 
         init() {}
-        // Every field optional on disk, so files from older versions still load.
+        // Every field optional on disk, so files from older versions still load, and
+        // every entry decoded by itself, so a damaged one doesn't take the rest with it.
         init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
-            entries = try c.decodeIfPresent([String: WatchEntry].self, forKey: .entries) ?? [:]
-            progress = try c.decodeIfPresent([String: Double].self, forKey: .progress) ?? [:]
-            favorites = try c.decodeIfPresent([SavedTitle].self, forKey: .favorites) ?? []
-            streams = (try? c.decodeIfPresent([String: StreamChoice].self, forKey: .streams)) ?? [:]
-            removed = (try? c.decodeIfPresent([String: Date].self, forKey: .removed)) ?? [:]
-            tracks = (try? c.decodeIfPresent([String: TrackChoice].self, forKey: .tracks)) ?? [:]
+            entries = c.lenientDictionary(.entries)
+            progress = c.lenientDictionary(.progress)
+            favorites = c.lenientArray(.favorites)
+            streams = c.lenientDictionary(.streams)
+            removed = c.lenientDictionary(.removed)
+            tracks = c.lenientDictionary(.tracks)
         }
     }
 
     private var disk = Disk()
-    private let file: URL
+    @ObservationIgnored private let libraryStore: DiskStore
     /// Separate from `disk` so logging watch time doesn't redraw everything showing progress.
     private(set) var stats = StatsDisk()
-    private let statsFile: URL
+    @ObservationIgnored private let statsStore: DiskStore
+    /// What has changed since the last write. Changes within half a second go out as one
+    /// write (progress, history and watch time are often saved together).
+    @ObservationIgnored private var libraryDirty = false
+    @ObservationIgnored private var statsDirty = false
+    @ObservationIgnored private var flushScheduled = false
 
-    init() {
-        Migration.runOnce()
-        let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+    /// `directory` is where the files live; nil means Application Support/Encore (tests
+    /// pass a folder of their own).
+    init(directory: URL? = nil) {
+        if directory == nil { Migration.runOnce() }
+        let dir = directory ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Encore", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        file = dir.appendingPathComponent("library.json")
-        statsFile = dir.appendingPathComponent("stats.json")
-        if let data = try? Data(contentsOf: file), let d = try? JSONDecoder().decode(Disk.self, from: data) {
-            disk = d
-        }
-        if let data = try? Data(contentsOf: statsFile), let s = try? JSONDecoder().decode(StatsDisk.self, from: data) {
-            stats = s
-        }
+        libraryStore = DiskStore(file: dir.appendingPathComponent("library.json"))
+        statsStore = DiskStore(file: dir.appendingPathComponent("stats.json"))
+        // A file that can't be read is copied aside by the store before anything is saved.
+        if let d = libraryStore.load(Disk.self) { disk = d }
+        if let s = statsStore.load(StatsDisk.self) { stats = s }
         seedStatsIfNeeded()
         refreshPosterState()
     }
@@ -133,11 +138,33 @@ final class WatchStore {
 
     private func saveStats() {
         guard !isTestRun else { return }
-        let snapshot = stats
-        let file = statsFile
-        Task.detached(priority: .utility) {
-            if let data = try? JSONEncoder().encode(snapshot) { try? data.write(to: file, options: .atomic) }
+        statsDirty = true
+        scheduleFlush()
+    }
+
+    private func scheduleFlush() {
+        guard !flushScheduled else { return }
+        flushScheduled = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            MainActor.assumeIsolated { self?.flush(wait: false) }
         }
+    }
+
+    private func flush(wait: Bool) {
+        flushScheduled = false
+        if libraryDirty {
+            libraryDirty = false
+            if wait { libraryStore.writeNow(disk) } else { libraryStore.write(disk) }
+        }
+        if statsDirty {
+            statsDirty = false
+            if wait { statsStore.writeNow(stats) } else { statsStore.write(stats) }
+        }
+    }
+
+    /// Everything on disk before returning (when the app is quitting).
+    func flushNow() {
+        flush(wait: true)
     }
 
     // MARK: Stats
@@ -232,11 +259,8 @@ final class WatchStore {
     private func save() {
         refreshPosterState()
         guard !isTestRun else { return }
-        let snapshot = disk
-        let file = file
-        Task.detached(priority: .utility) {
-            if let data = try? JSONEncoder().encode(snapshot) { try? data.write(to: file, options: .atomic) }
-        }
+        libraryDirty = true
+        scheduleFlush()
     }
 
     var continueWatching: [WatchEntry] {

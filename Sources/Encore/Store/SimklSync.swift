@@ -243,7 +243,7 @@ final class SimklSync {
     func scrobble(_ action: String, meta: Meta, video: Video?, position: Double, duration: Double) {
         guard active, duration > 0, var body = subject(meta: meta, video: video) else { return }
         body["progress"] = min(100, max(0, position / duration * 100))
-        Task { await post("/scrobble/\(action)", body) }
+        Outbox.shared.send { [self] in await post("/scrobble/\(action)", body) }
     }
 
     func setWatched(meta: Meta, videos: [Video], watched: Bool) {
@@ -256,6 +256,6 @@ final class SimklSync {
             body = ["shows": [["ids": ["imdb": imdb],
                                "seasons": bySeason.map { ["number": $0.key, "episodes": $0.value.map { ["number": $0.episode!] }] }]]]
         }
-        Task { await post(watched ? "/sync/history" : "/sync/history/remove", body) }
+        Outbox.shared.send { [self] in await post(watched ? "/sync/history" : "/sync/history/remove", body) }
     }
 }

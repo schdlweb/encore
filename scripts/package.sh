@@ -13,6 +13,17 @@ STAGE=$(mktemp -d -t encore-package)
 ditto build.nosync/Encore.app "$STAGE/Encore.app"
 python3 -I scripts/bundle-dylibs.py "$STAGE/Encore.app"
 
+# The Homebrew libraries only load on the macOS they were built for (or later). Say so in
+# the app, so an older Mac gets Finder's "needs macOS N or later" rather than a crash at
+# launch with a missing-symbol report.
+MINOS=$(for lib in "$STAGE/Encore.app/Contents/Frameworks/"*.dylib; do
+  otool -l "$lib" | awk '/LC_BUILD_VERSION/ {b=1} b && $1 == "minos" {print $2; b=0}'
+done | sort -t. -k1,1n -k2,2n -k3,3n | tail -1)
+if [[ -n $MINOS ]]; then
+  /usr/libexec/PlistBuddy -c "Set :LSMinimumSystemVersion $MINOS" "$STAGE/Encore.app/Contents/Info.plist"
+  echo "Bundled libraries need macOS $MINOS or later"
+fi
+
 # install_name_tool invalidates signatures: sign each library, then the app.
 xattr -cr "$STAGE/Encore.app"
 for lib in "$STAGE/Encore.app/Contents/Frameworks/"*.dylib; do

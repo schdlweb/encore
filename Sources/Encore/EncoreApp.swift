@@ -63,6 +63,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         MainActor.assumeIsolated { ScrollActivity.install() }
     }
 
+    /// Quitting (⌘Q, the Dock, an update) while something plays: the player's view never
+    /// disappears, so its progress save and "stopped" reports are run from here, and the
+    /// library is written out before the process ends.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        MainActor.assumeIsolated {
+            guard let app = AppState.current else { return .terminateNow }
+            Task {
+                await app.prepareToQuit()
+                sender.reply(toApplicationShouldTerminate: true)
+            }
+            return .terminateLater
+        }
+    }
+
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 
     /// Clicking the Dock icon while something plays brings the player forward.

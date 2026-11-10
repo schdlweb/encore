@@ -135,6 +135,9 @@ struct PlayStatus: Equatable {
     }
 }
 
+/// The app's shared state. This file has the addon connection, catalogs, title details
+/// and navigation; `AppState+Playback` finds, checks and starts streams, and
+/// `AppState+Discovery` builds Upcoming and Recommended for You.
 @Observable
 @MainActor
 final class AppState {
@@ -152,13 +155,13 @@ final class AppState {
     var playStatus: PlayStatus?
     var picker: PickerTarget?
     var trailer: TrailerRequest?
-    @ObservationIgnored private var playTask: Task<Void, Never>?
-    @ObservationIgnored private var prewarmTask: Task<Void, Never>?
+    @ObservationIgnored var playTask: Task<Void, Never>?
+    @ObservationIgnored var prewarmTask: Task<Void, Never>?
     /// Stream lists fetched ahead of Play, by video id (the addon takes ~7 s per lookup).
-    @ObservationIgnored private var prepared: [String: (task: Task<PreparedStreams, Error>, at: Date)] = [:]
+    @ObservationIgnored var prepared: [String: (task: Task<PreparedStreams, Error>, at: Date)] = [:]
     /// Streams already checked, by addon URL → the resolved file URL mpv can open directly.
-    @ObservationIgnored private var probed: [String: (url: URL, at: Date)] = [:]
-    @ObservationIgnored private var languageCache: [String: String?] = [:]
+    @ObservationIgnored var probed: [String: (url: URL, at: Date)] = [:]
+    @ObservationIgnored var languageCache: [String: String?] = [:]
 
     var client: AddonClient?
     var manifest: Manifest?
@@ -181,27 +184,52 @@ final class AppState {
         }
         return (inProgress + fresh).sorted { $0.updatedAt > $1.updatedAt }
     }
-    @ObservationIgnored private var upcomingCheckedAt: Date?
+    @ObservationIgnored var upcomingCheckedAt: Date?
     /// Titles picked from what you've watched, best first.
     var recommendations: [Recommendation] = []
-    @ObservationIgnored private var recommendationsBuiltAt: Date?
+    @ObservationIgnored var recommendationsBuiltAt: Date?
     var ambientImage: String?
 
-    private var metaCache: [String: Meta] = [:]
+    /// Full title details by id, with when they were fetched. Shows are asked for again
+    /// after an hour (that's how a new episode is noticed while Encore stays open);
+    /// movies after a day.
+    private var metaCache: [String: (meta: Meta, at: Date)] = [:]
+
+    private func cachedMeta(_ id: String, allowStale: Bool = false) -> Meta? {
+        guard let hit = metaCache[id] else { return nil }
+        let lifetime: TimeInterval = hit.meta.isSeriesLike ? 3600 : 24 * 3600
+        return allowStale || Date().timeIntervalSince(hit.at) < lifetime ? hit.meta : nil
+    }
+
+    /// The running app, for the app delegate (quitting) and nothing else.
+    @ObservationIgnored static weak var current: AppState?
+    /// Set by the player while it's up: saves progress and reports the stop. Run on quit,
+    /// where the player's view never gets to disappear.
+    @ObservationIgnored var playerTeardown: (id: UUID, run: () -> Void)?
     private var rowModels: [String: CatalogRowModel] = [:]
 
     init() {
         jellyfin = JellyfinSync(settings: settings, watch: watch)
         simkl = SimklSync(settings: settings)
+        Self.current = self
         if !settings.manifestURL.isEmpty { Task { await connect() } }
         // Pick up what the other app played: on launch (after connecting), whenever Encore
         // comes to the front, and every 5 minutes.
         NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { Task { await self?.pullSync() } }
+            MainActor.assumeIsolated { _ = Task { await self?.pullSync() } }
         }
         Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { Task { await self?.pullSync() } }
+            MainActor.assumeIsolated { _ = Task { await self?.pullSync() } }
         }
+    }
+
+    /// Before quitting: the player saves and reports its stop, the library is written
+    /// out, and sync reports still on their way get a moment to arrive.
+    func prepareToQuit() async {
+        playerTeardown?.run()
+        playerTeardown = nil
+        watch.flushNow()
+        await Outbox.shared.drain(timeout: 2.5)
     }
 
     // MARK: Sync (AIOStreams Jellyfin, Simkl)
@@ -227,7 +255,7 @@ final class AppState {
 
     func removeFromContinue(_ entry: WatchEntry) {
         watch.removeFromContinue(entry.title.id)
-        let imdb = metaCache[entry.title.id]?.imdbId ?? entry.title.id
+        let imdb = cachedMeta(entry.title.id, allowStale: true)?.imdbId ?? entry.title.id
         jellyfin.clearResume(imdb: imdb, type: entry.title.type, season: entry.season, episode: entry.episode)
     }
 
@@ -238,7 +266,7 @@ final class AppState {
 
     func setDropped(_ metaId: String, _ dropped: Bool) {
         watch.setDropped(metaId, dropped)
-        if let meta = metaCache[metaId] { jellyfin.setDropped(meta: meta, dropped: dropped) }
+        if let meta = cachedMeta(metaId, allowStale: true) { jellyfin.setDropped(meta: meta, dropped: dropped) }
     }
 
     // MARK: Addon
@@ -351,25 +379,28 @@ final class AppState {
     }
 
     func fullMeta(_ preview: Meta) async -> Meta? {
-        if let m = metaCache[preview.id] { return m }
+        if let m = cachedMeta(preview.id) { return m }
         guard let client else { return nil }
         async let title = SearchService.imdbTitle(preview.id)
-        guard var full = try? await client.meta(type: preview.type, id: preview.id) else { return nil }
+        // Couldn't refresh (offline, addon down): the copy from earlier is better than nothing.
+        guard var full = try? await client.meta(type: preview.type, id: preview.id) else {
+            return cachedMeta(preview.id, allowStale: true)
+        }
         if let t = await title { full.name = t }
         let merged = await addingMissingAnimeSeasons(preview.merged(with: full))
-        metaCache[preview.id] = merged
+        metaCache[preview.id] = (merged, Date())
         return merged
     }
 
     func fullMeta(type: String, id: String) async -> Meta? {
-        if let m = metaCache[id] { return m }
+        if let m = cachedMeta(id) { return m }
         guard let client else { return nil }
         async let title = SearchService.imdbTitle(id)
-        guard var full = try? await client.meta(type: type, id: id) else { return nil }
+        guard var full = try? await client.meta(type: type, id: id) else { return cachedMeta(id, allowStale: true) }
         // The addon names some titles by their original title; IMDb's is the English one.
         if let t = await title { full.name = t }
         let completed = await addingMissingAnimeSeasons(full)
-        metaCache[id] = completed
+        metaCache[id] = (completed, Date())
         return completed
     }
 
@@ -405,148 +436,10 @@ final class AppState {
         return try await client.streams(type: meta.type, videoId: video?.id ?? meta.id)
     }
 
-    // MARK: Upcoming
-
-    /// Shows you're watching, saved, or have watched (not dropped): the next episode of
-    /// each with a future air date. Up to 25 shows, refreshed at most every 30 minutes.
-    func loadUpcoming() async {
-        guard client != nil else { return }
-        if let t = upcomingCheckedAt, Date().timeIntervalSince(t) < 30 * 60 { return }
-        upcomingCheckedAt = Date()
-        var seen = Set<String>()
-        let followed = (watch.continueWatching.map(\.title) + watch.favorites + watch.watchHistory.map(\.title))
-            .filter { $0.type != "movie" && !watch.isDropped($0.id) && seen.insert($0.id).inserted }
-            .prefix(25)
-        var found: [UpcomingEpisode] = []
-        var fresh: [WatchEntry] = []
-        await withTaskGroup(of: (UpcomingEpisode?, WatchEntry?).self) { group in
-            for title in followed {
-                group.addTask { @MainActor in
-                    guard let meta = await self.fullMeta(type: title.type, id: title.id) else { return (nil, nil) }
-                    let now = Date()
-                    let newEpisode = self.newEpisode(of: meta, now: now)
-                    let next = meta.videos
-                        .filter { ($0.season ?? 1) > 0 && ($0.released ?? .distantPast) > now }
-                        .min { ($0.released ?? .distantFuture) < ($1.released ?? .distantFuture) }
-                    guard let next else { return (nil, newEpisode) }
-                    let lengths = await DiscoveryService.episodeDetails(for: meta)
-                    return (UpcomingEpisode(meta: meta, video: next, runtime: lengths.minutes(season: next.season, episode: next.episode)), newEpisode)
-                }
-            }
-            for await (item, newEpisode) in group {
-                if let item { found.append(item) }
-                if let newEpisode { fresh.append(newEpisode) }
-            }
-        }
-        upcoming = found.sorted { ($0.video.released ?? .distantFuture) < ($1.video.released ?? .distantFuture) }
-        newEpisodes = fresh.filter { !hiddenNewEpisodes.contains($0.videoId) }
-    }
+    // MARK: Getting a title page ready
 
     /// Hidden from Continue Watching for this session (right-click → Hide).
-    @ObservationIgnored private var hiddenNewEpisodes: Set<String> = []
-
-    func hideNewEpisode(_ entry: WatchEntry) {
-        hiddenNewEpisodes.insert(entry.videoId)
-        newEpisodes.removeAll { $0.videoId == entry.videoId }
-    }
-
-    /// The episode after the one you last finished, if it came out after you finished it
-    /// (so you were caught up) and you haven't watched it yet.
-    private func newEpisode(of meta: Meta, now: Date) -> WatchEntry? {
-        guard let e = watch.entry(for: meta.id), e.isFinished,
-              let last = meta.videos.first(where: { $0.id == e.videoId }),
-              let next = nextVideo(in: meta, after: last),
-              let aired = next.released, aired <= now, aired > e.updatedAt,
-              !watch.isWatched(next.id) else { return nil }
-        return WatchEntry(title: SavedTitle(meta), videoId: next.id, season: next.season, episode: next.episode,
-                          episodeTitle: next.title.isEmpty ? nil : next.title, episodeThumbnail: next.thumbnail,
-                          position: 0, duration: 0, updatedAt: aired)
-    }
-
-    // MARK: Recommendations
-
-    /// "Recommended for You": related titles of what you've watched lately (and My List),
-    /// scored by how strongly and how often they're suggested, minus anything you've
-    /// already seen or dropped. Built at most every 6 hours.
-    func loadRecommendations(force: Bool = false) async {
-        guard client != nil else { return }
-        if !force, let t = recommendationsBuiltAt, Date().timeIntervalSince(t) < 6 * 3600 { return }
-        recommendationsBuiltAt = Date()
-
-        // Starting points: loved and liked titles first, then what you've watched lately and
-        // My List. Disliked titles never seed, and pull their relatives down instead.
-        var seenIds = Set<String>()
-        let rated = watch.ratedTitles
-        let positive = rated.filter { $0.rating != .dislike }.sorted { $0.rating.rawValue > $1.rating.rawValue }.map(\.title)
-        let disliked = rated.filter { $0.rating == .dislike }.map(\.title)
-        let seeds = (positive + watch.continueWatching.map(\.title) + watch.watchHistory.map(\.title) + watch.favorites)
-            .filter { !watch.isDropped($0.id) && watch.rating(for: $0.id) != .dislike && seenIds.insert($0.id).inserted }
-            .prefix(10)
-        let negativeSeeds = Array(disliked.prefix(4))
-        guard !seeds.isEmpty else { return }
-        let watchedIds = Set(watch.watchHistory.map(\.title.id) + watch.history.map(\.title.id) + watch.favorites.map(\.id))
-        let watchedNames = Set((watch.watchHistory.map(\.title.name) + watch.history.map(\.title.name)).map(Self.normalizedName))
-
-        // How much a section counts: AniList's crowd recommendations most, franchise next.
-        func weight(_ section: String) -> Double {
-            switch section {
-            case "You Might Also Like": 3
-            case "Seasons & Related", "In This Franchise": 2
-            default: 1
-            }
-        }
-        var scores: [String: (meta: Meta, score: Double, because: String, best: Double)] = [:]
-        await withTaskGroup(of: (SavedTitle, [DiscoveryService.Section]).self) { group in
-            for (rank, seed) in (Array(seeds) + negativeSeeds).enumerated() {
-                group.addTask { @MainActor in
-                    guard let meta = await self.fullMeta(type: seed.type, id: seed.id) else { return (seed, []) }
-                    _ = rank
-                    return (seed, await DiscoveryService.related(to: meta))
-                }
-            }
-            for await (seed, sections) in group {
-                // More recent seeds count a little more; your rating scales it (negative for
-                // titles you didn't like).
-                let recency = 1 + 0.5 * Double(seeds.count - (seeds.firstIndex(of: seed) ?? 0)) / Double(seeds.count)
-                let ratingWeight = watch.rating(for: seed.id)?.weight ?? 1
-                for section in sections {
-                    for (i, m) in section.items.prefix(20).enumerated() {
-                        guard !watchedIds.contains(m.id), !watch.isDropped(m.id), !watch.isNotInterested(m.id),
-                              !watchedNames.contains(Self.normalizedName(m.name)), m.poster != nil else { continue }
-                        guard watch.rating(for: m.id) == nil else { continue }
-                        let s = weight(section.title) * recency * ratingWeight * (1 - Double(i) / 25)
-                        var entry = scores[m.id] ?? (m, 0, seed.name, 0)
-                        entry.score += s
-                        if s > entry.best { entry.best = s; entry.because = seed.name }
-                        scores[m.id] = entry
-                    }
-                }
-            }
-        }
-        recommendations = scores.values
-            .filter { $0.score > 0 }
-            .sorted { $0.score > $1.score }
-            .prefix(48)
-            .map { Recommendation(meta: $0.meta, because: $0.because) }
-    }
-
-    /// Rates a title and rebuilds recommendations around it.
-    func rate(_ meta: SavedTitle, _ rating: Rating?) {
-        watch.setRating(rating, for: meta)
-        Task { await loadRecommendations(force: true) }
-    }
-
-    /// Hides a recommendation now and from future ones.
-    func notInterested(in rec: Recommendation) {
-        watch.markNotInterested(rec.meta.id)
-        withAnimation(.easeOut(duration: 0.25)) { recommendations.removeAll { $0.id == rec.id } }
-    }
-
-    private static func normalizedName(_ s: String) -> String {
-        s.lowercased().filter { $0.isLetter || $0.isNumber }
-    }
-
-    // MARK: Getting a title page ready
+    @ObservationIgnored var hiddenNewEpisodes: Set<String> = []
 
     @ObservationIgnored private var warmTask: Task<Void, Never>?
 
@@ -574,289 +467,6 @@ final class AppState {
             let m = await fullMeta(type: saved.type, id: saved.id)
             if let m { open(m) }
         }
-    }
-
-    // MARK: Playback
-
-    /// True while this title/episode is being started.
-    func isStarting(_ videoId: String) -> Bool {
-        playStatus?.phase == .working && playStatus?.videoId == videoId
-    }
-
-    /// Finds streams and plays the first one that checks out. Progress and failures
-    /// show in the status panel, which can cancel it.
-    func requestPlay(meta: Meta, video: Video?, preferBingeGroup: String? = nil) {
-        playTask?.cancel()
-        playTask = Task { await startPlayback(meta: meta, video: video, preferBingeGroup: preferBingeGroup) }
-    }
-
-    /// Plays one stream the user picked, after checking it.
-    func requestPlay(meta: Meta, video: Video?, stream: StreamItem, alternatives: [StreamItem]) {
-        playTask?.cancel()
-        playTask = Task {
-            playStatus = PlayStatus(meta: meta, video: video, message: "Checking stream…", detail: stream.oneLine)
-            async let languages = audioLanguages(for: meta)
-            switch await check(stream) {
-            case .playable(let url):
-                let alang = await languages
-                guard !Task.isCancelled else { return }
-                playStatus = nil
-                play(meta: meta, video: video, stream: stream, url: url, alternatives: alternatives, audioLanguages: alang)
-            case .failed(let reason):
-                guard !Task.isCancelled else { return }
-                playStatus = PlayStatus(meta: meta, video: video, phase: .failed,
-                                        message: "That stream didn't work", detail: reason)
-            }
-        }
-    }
-
-    func cancelPlay() {
-        playTask?.cancel()
-        playTask = nil
-        playStatus = nil
-    }
-
-    private func startPlayback(meta: Meta, video: Video?, preferBingeGroup: String?) async {
-        prewarmTask?.cancel()
-        var status = PlayStatus(meta: meta, video: video, message: "Finding streams…")
-        playStatus = status
-        async let languages = audioLanguages(for: meta)
-        let found: PreparedStreams
-        do {
-            found = try await preparedStreams(meta: meta, video: video).value
-        } catch {
-            guard !Task.isCancelled else { return }
-            status.phase = .failed
-            status.message = "Couldn't get streams"
-            status.detail = error.localizedDescription
-            playStatus = status
-            return
-        }
-        guard !Task.isCancelled else { return }
-        let streams = found.streams, matcher = found.matcher
-        let ordered = order(streams, matcher: matcher, meta: meta, video: video, preferBingeGroup: preferBingeGroup)
-        let candidates = Array(ordered.prefix(8))
-
-        // Check one stream ahead of the one being waited on, so a dead link doesn't cost a
-        // full round trip before the next is tried. At most two checks are in flight.
-        var checks: [Int: Task<StreamProbe.Result, Never>] = [:]
-        func launch(_ i: Int) {
-            guard i < candidates.count, checks[i] == nil else { return }
-            let stream = candidates[i]
-            checks[i] = Task { await self.check(stream) }
-        }
-        defer { checks.values.forEach { $0.cancel() } }
-        launch(0)
-        for (i, stream) in candidates.enumerated() {
-            launch(i + 1)
-            status.message = candidates.count > 1 ? "Checking stream \(i + 1) of \(candidates.count)…" : "Checking stream…"
-            status.detail = stream.oneLine
-            playStatus = status
-            let result = await checks[i]!.value
-            guard !Task.isCancelled else { return }
-            switch result {
-            case .playable(let url):
-                let alang = await languages
-                guard !Task.isCancelled else { return }
-                playStatus = nil
-                play(meta: meta, video: video, stream: stream, url: url, alternatives: ordered, audioLanguages: alang)
-                playback?.matcher = matcher
-                return
-            case .failed(let reason):
-                status.failures.append("\(stream.oneLine): \(reason)")
-            }
-        }
-
-        status.phase = .failed
-        if streams.isEmpty {
-            status.message = "No streams found"
-            status.detail = "Your addon didn't return anything for this."
-        } else if candidates.isEmpty {
-            status.message = "No playable streams"
-            status.detail = "Only torrent or external results came back; those need a debrid service in AIOStreams."
-        } else {
-            status.message = "None of the top \(candidates.count) streams worked"
-            status.detail = nil
-        }
-        playStatus = status
-    }
-
-    /// Playable streams in the order to try them: the exact stream last played for this
-    /// episode, then the same release group (the last episode's, else the one last used for
-    /// this title), then AIOStreams' own order, with last resorts (worst last): files from
-    /// another season/entry, OVAs/specials when a regular episode was asked for, and Dolby
-    /// Vision-only files (wrong colors here).
-    private func order(_ streams: [StreamItem], matcher: EpisodeMatcher, meta: Meta, video: Video?, preferBingeGroup: String?) -> [StreamItem] {
-        let remembered = watch.streamChoice(for: meta.id)
-        let group = preferBingeGroup ?? remembered?.bingeGroup
-        var seen = Set<String>()
-        let playable = streams.filter { $0.isPlayable && seen.insert($0.url!).inserted }
-        let grouped = playable.filter { group != nil && $0.bingeGroup == group }
-            + playable.filter { group == nil || $0.bingeGroup != group }
-        let wantsRegularEpisode = (video?.season ?? 1) > 0 && !StreamItem.isExtraName(video?.title ?? "")
-        // Series packs: no episode in the name and far bigger than the real episodes (a 33 GB
-        // "Kusuriya no Hitorigoto" folder among 1.5 GB episodes). The debrid service picks
-        // some file inside, often from another season, so they're tried last.
-        let episodeSizes = playable.filter { matcher.identifiesEpisode($0) }.compactMap(\.videoSize).sorted()
-        let typicalSize = episodeSizes.isEmpty ? nil : episodeSizes[episodeSizes.count / 2]
-        func looksLikePack(_ s: StreamItem) -> Bool {
-            guard video?.season != nil, !matcher.identifiesEpisode(s), let size = s.videoSize else { return false }
-            return size > max(8_000_000_000, (typicalSize ?? 0) * 4)
-        }
-        func penalty(_ s: StreamItem) -> Int {
-            (matcher.isMismatch(s) ? 4 : 0) + (looksLikePack(s) ? 3 : 0)
-                + (wantsRegularEpisode && s.looksLikeExtra ? 2 : 0) + (s.isDolbyVisionOnly ? 1 : 0)
-        }
-        var ordered = grouped.enumerated()
-            .sorted { (penalty($0.element), $0.offset) < (penalty($1.element), $1.offset) }
-            .map(\.element)
-        // The user's own pick (or what last played fine) beats the heuristics.
-        // (Unless it's from another season/entry, so a wrong file played once can't stick.)
-        if let remembered, remembered.videoId == (video?.id ?? meta.id),
-           let i = ordered.firstIndex(where: { remembered.matches($0) && !matcher.isMismatch($0) }) {
-            ordered.insert(ordered.remove(at: i), at: 0)
-        }
-        return ordered
-    }
-
-    /// The order Play would try streams in (for checking the ranking).
-    func rankedStreams(meta: Meta, video: Video?) async -> [StreamItem] {
-        guard let found = try? await preparedStreams(meta: meta, video: video).value else { return [] }
-        return order(found.streams, matcher: found.matcher, meta: meta, video: video, preferBingeGroup: nil)
-    }
-
-    // MARK: Prefetching
-
-    /// The stream list (and wrong-episode matcher) for a video, shared between prefetching
-    /// and Play so the addon is asked once. Kept 15 minutes; failures aren't kept.
-    private func preparedStreams(meta: Meta, video: Video?) -> Task<PreparedStreams, Error> {
-        let key = video?.id ?? meta.id
-        if let hit = prepared[key], Date().timeIntervalSince(hit.at) < 15 * 60 { return hit.task }
-        let task = Task<PreparedStreams, Error> {
-            async let matcher = EpisodeMatcher.make(meta: meta, video: video)
-            let streams = try await self.streams(for: meta, video: video)
-            return PreparedStreams(streams: streams, matcher: await matcher)
-        }
-        prepared[key] = (task, Date())
-        prepared = prepared.filter { Date().timeIntervalSince($0.value.at) < 15 * 60 }
-        Task {
-            if case .failure = await task.result, prepared[key]?.task == task { prepared[key] = nil }
-        }
-        return task
-    }
-
-    /// Checks a stream, reusing a recent result. Only successes are remembered: debrid
-    /// links stay valid for hours, but a failure (e.g. still downloading) may clear up.
-    private func check(_ stream: StreamItem) async -> StreamProbe.Result {
-        guard let key = stream.url else { return await StreamProbe.check(stream) }
-        if let hit = probed[key], Date().timeIntervalSince(hit.at) < 20 * 60 { return .playable(hit.url) }
-        let result = await StreamProbe.check(stream)
-        if case .playable(let url) = result {
-            probed = probed.filter { Date().timeIntervalSince($0.value.at) < 20 * 60 }
-            probed[key] = (url, Date())
-        }
-        return result
-    }
-
-    /// Gets a title ready to play before the user presses Play: fetches its stream list and
-    /// checks the stream Play would pick first. That's two requests, done once per video for
-    /// 15 minutes. Only the latest call runs (opening another page or hovering another
-    /// card cancels the last one), it waits a moment so pages flicked past cost nothing,
-    /// and it stays quiet while something is playing.
-    func prewarm(meta: Meta, video: Video?) {
-        if meta.isSeriesLike, video == nil { return }
-        runPrewarm { (meta, video) }
-    }
-
-    /// Same, for a Continue Watching entry (looks up the title first; that's cached too).
-    func prewarm(_ entry: WatchEntry) {
-        runPrewarm { [weak self] in
-            guard let meta = await self?.fullMeta(type: entry.title.type, id: entry.title.id) else { return nil }
-            return (meta, meta.videos.first { $0.id == entry.videoId })
-        }
-    }
-
-    private func runPrewarm(_ target: @escaping () async -> (Meta, Video?)?) {
-        guard client != nil, playback == nil, playStatus?.phase != .working else { return }
-        prewarmTask?.cancel()
-        prewarmTask = Task {
-            try? await Task.sleep(for: .milliseconds(600))
-            guard !Task.isCancelled, let (meta, video) = await target(), !Task.isCancelled else { return }
-            async let languages = audioLanguages(for: meta)
-            guard let found = try? await preparedStreams(meta: meta, video: video).value, !Task.isCancelled,
-                  let first = order(found.streams, matcher: found.matcher, meta: meta, video: video, preferBingeGroup: nil).first
-            else { return }
-            _ = await check(first)
-            _ = await languages
-        }
-    }
-
-    private func play(meta: Meta, video: Video?, stream: StreamItem, url: URL, alternatives: [StreamItem], audioLanguages: String?) {
-        let videoId = video?.id ?? meta.id
-        watch.rememberStream(stream, metaId: meta.id, videoId: videoId)
-        playback = PlaybackRequest(
-            meta: meta, video: video, stream: stream, url: url, alternatives: alternatives,
-            startAt: watch.resumePosition(metaId: meta.id, videoId: videoId),
-            audioLanguages: audioLanguages
-        )
-    }
-
-    /// mpv `alang` for a title: its original language when that setting is on (with the
-    /// manual list as a fallback), otherwise the manual list.
-    private func audioLanguages(for meta: Meta) async -> String? {
-        let key = "\(settings.preferOriginalAudio)|\(settings.preferredAudioLanguages)|\(meta.id)"
-        if let hit = languageCache[key] { return hit }
-        let result = await lookUpAudioLanguages(for: meta)
-        // Only answers are kept: a lookup that failed (Wikidata stalls now and then) is tried
-        // again next time instead of leaving every episode on the file's default track.
-        if result != nil { languageCache[key] = result }
-        return result
-    }
-
-    private func lookUpAudioLanguages(for meta: Meta) async -> String? {
-        let manual = settings.preferredAudioLanguages.trimmingCharacters(in: .whitespaces)
-        guard settings.preferOriginalAudio else { return manual.isEmpty ? nil : manual }
-        guard let code = await DiscoveryService.originalLanguage(of: meta) else { return manual.isEmpty ? nil : manual }
-        var codes = languageCodes(code)
-        if !manual.isEmpty { codes.append(manual) }
-        var seen = Set<String>()
-        return codes.filter { seen.insert($0).inserted }.joined(separator: ",")
-    }
-
-    func nextVideo(in meta: Meta, after video: Video?) -> Video? {
-        guard let video else { return nil }
-        let ordered = meta.videos
-            .filter { ($0.season ?? 1) > 0 }
-            .sorted { ($0.season ?? 0, $0.episode ?? 0) < ($1.season ?? 0, $1.episode ?? 0) }
-        guard let i = ordered.firstIndex(where: { $0.id == video.id }), i + 1 < ordered.count else { return nil }
-        return ordered[i + 1]
-    }
-
-    /// Where "Play" should start for a title: the episode in progress, else the next one, else the first.
-    func resumeTarget(for meta: Meta) -> (video: Video?, label: String) {
-        guard meta.isSeriesLike, !meta.videos.isEmpty else {
-            if let e = watch.entry(for: meta.id), e.position > 30, !e.isFinished {
-                return (nil, "Resume · \(formatRemaining(e.remaining)) left")
-            }
-            return (nil, "Play")
-        }
-        let ordered = meta.videos
-            .filter { ($0.season ?? 1) > 0 }
-            .sorted { ($0.season ?? 0, $0.episode ?? 0) < ($1.season ?? 0, $1.episode ?? 0) }
-        if let e = watch.entry(for: meta.id), let current = ordered.first(where: { $0.id == e.videoId }) {
-            if !e.isFinished {
-                return (current, "Resume \(e.episodeLabel ?? "")")
-            }
-            if let next = nextVideo(in: meta, after: current) {
-                let label = next.season.flatMap { s in next.episode.map { String(format: "S%02dE%02d", s, $0) } } ?? ""
-                return (next, "Play \(label)")
-            }
-        }
-        if let first = ordered.first {
-            let label = first.season.flatMap { s in first.episode.map { String(format: "S%02dE%02d", s, $0) } } ?? ""
-            return (first, "Play \(label)")
-        }
-        return (nil, "Play")
     }
 }
 

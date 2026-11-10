@@ -51,13 +51,15 @@ struct StatsDisk: Codable {
     init() {}
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        movieHours = try c.decodeIfPresent([String: Double].self, forKey: .movieHours) ?? [:]
-        showHours = try c.decodeIfPresent([String: Double].self, forKey: .showHours) ?? [:]
-        history = (try? c.decodeIfPresent([HistoryItem].self, forKey: .history)) ?? []
-        dropped = try c.decodeIfPresent([String].self, forKey: .dropped) ?? []
-        notInterested = try c.decodeIfPresent([String].self, forKey: .notInterested) ?? []
-        ratings = (try? c.decodeIfPresent([String: RatedTitle].self, forKey: .ratings)) ?? [:]
-        seeded = try c.decodeIfPresent(Bool.self, forKey: .seeded) ?? false
+        movieHours = c.lenientDictionary(.movieHours)
+        showHours = c.lenientDictionary(.showHours)
+        history = c.lenientArray(.history)
+        dropped = c.lenientArray(.dropped)
+        notInterested = c.lenientArray(.notInterested)
+        ratings = c.lenientDictionary(.ratings)
+        // Read as "already seeded" if it's there but unreadable: seeding twice would count
+        // old sessions again.
+        seeded = c.lenientValue(.seeded, default: c.contains(.seeded))
     }
 
     static let hourFormat: DateFormatter = {

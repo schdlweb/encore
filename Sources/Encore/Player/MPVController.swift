@@ -227,7 +227,9 @@ final class MPVController {
         errorMessage = nil
         buffering = true
         set("start", startAt.map { String(Int($0)) } ?? "none")
-        set("http-header-fields", headers.map { "\($0.key): \($0.value)" }.joined(separator: ","))
+        // As a list, not one comma-joined string: a value with a comma in it (a cookie, an
+        // Accept header) would otherwise be cut in two.
+        setList("http-header-fields", headers.map { "\($0.key): \($0.value)" })
         command(["loadfile", url, "replace"])
     }
 
@@ -242,18 +244,30 @@ final class MPVController {
         paused = value
         setAsync("pause", value ? "yes" : "no")
     }
-    func seek(to seconds: Double) { command(["seek", String(seconds), "absolute+keyframes"]) }
+    // Seeks and track/volume changes are sent without waiting for mpv: on a stream that
+    // has stalled, waiting meant the whole window froze until the network answered.
+    func seek(to seconds: Double) { commandAsync(["seek", String(seconds), "absolute+keyframes"]) }
     /// To this exact time (used for a scrub preview's own frame time, which is a keyframe,
     /// so it's as quick as a keyframe seek).
-    func seekExact(to seconds: Double) { command(["seek", String(seconds), "absolute+exact"]) }
-    func seek(by seconds: Double) { command(["seek", String(seconds), "relative"]) }
-    func setVolume(_ v: Double) { set("volume", String(Int(min(max(v, 0), 150)))) }
-    func toggleMute() { set("mute", muted ? "no" : "yes") }
-    func setSpeed(_ s: Double) { set("speed", String(s)) }
-    func selectAudio(_ id: Int) { set("aid", String(id)) }
-    func selectSubtitle(_ id: Int?) { set("sid", id.map(String.init) ?? "no") }
-    func setSubtitleDelay(_ seconds: Double) { set("sub-delay", String(seconds)) }
-    func setAudioDelay(_ seconds: Double) { set("audio-delay", String(seconds)) }
+    func seekExact(to seconds: Double) { commandAsync(["seek", String(seconds), "absolute+exact"]) }
+    func seek(by seconds: Double) { commandAsync(["seek", String(seconds), "relative"]) }
+    // Like pause: shown at once, confirmed by mpv's own report a moment later.
+    func setVolume(_ v: Double) {
+        volume = Double(Int(min(max(v, 0), 150)))
+        setAsync("volume", String(Int(volume)))
+    }
+    func toggleMute() {
+        muted.toggle()
+        setAsync("mute", muted ? "yes" : "no")
+    }
+    func setSpeed(_ s: Double) {
+        speed = s
+        setAsync("speed", String(s))
+    }
+    func selectAudio(_ id: Int) { setAsync("aid", String(id)) }
+    func selectSubtitle(_ id: Int?) { setAsync("sid", id.map(String.init) ?? "no") }
+    func setSubtitleDelay(_ seconds: Double) { setAsync("sub-delay", String(seconds)) }
+    func setAudioDelay(_ seconds: Double) { setAsync("audio-delay", String(seconds)) }
 
     /// A readable snapshot of what is actually playing, for the info panel.
     func mediaInfo() -> [(String, String)] {
@@ -435,7 +449,8 @@ final class MPVController {
         mpv_set_wakeup_callback(handle, nil, nil)
         mpv = nil
         updateDisplayAwake()
-        eventQueue.async { mpv_terminate_destroy(handle) }
+        nonisolated(unsafe) let dying = handle
+        eventQueue.async { mpv_terminate_destroy(dying) }
     }
 
     // MARK: libmpv plumbing
@@ -443,6 +458,28 @@ final class MPVController {
     private func set(_ name: String, _ value: String) {
         guard let mpv else { return }
         mpv_set_property_string(mpv, name, value)
+    }
+
+    /// Sets a list option (e.g. HTTP headers) item by item, so no item needs escaping.
+    private func setList(_ name: String, _ values: [String]) {
+        guard let mpv else { return }
+        let strings = values.map { strdup($0) }
+        defer { strings.forEach { free($0) } }
+        var items = strings.map { s -> mpv_node in
+            var n = mpv_node()
+            n.format = MPV_FORMAT_STRING
+            n.u.string = s
+            return n
+        }
+        items.withUnsafeMutableBufferPointer { buffer in
+            var list = mpv_node_list(num: Int32(buffer.count), values: buffer.baseAddress, keys: nil)
+            withUnsafeMutablePointer(to: &list) { listPointer in
+                var node = mpv_node()
+                node.format = MPV_FORMAT_NODE_ARRAY
+                node.u.list = listPointer
+                mpv_set_property(mpv, name, MPV_FORMAT_NODE, &node)
+            }
+        }
     }
 
     private func setAsync(_ name: String, _ value: String) {

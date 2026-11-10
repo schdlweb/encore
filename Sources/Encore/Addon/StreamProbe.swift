@@ -80,7 +80,7 @@ enum StreamProbe {
         }
     }
 
-    private static func errorVideoReason(_ url: URL) -> String? {
+    static func errorVideoReason(_ url: URL) -> String? {
         let parts = url.pathComponents
         guard parts.count >= 2, url.pathExtension.lowercased() == "mp4" else { return nil }
         let dir = parts[parts.count - 2]

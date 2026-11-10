@@ -19,7 +19,7 @@ OPT=$([[ $CONFIG == debug ]] && echo "-Onone -g" || echo "-O")
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
 swiftc -swift-version 5 -target arm64-apple-macosx14.0 -sdk /Library/Developer/CommandLineTools/SDKs/MacOSX26.sdk -parse-as-library ${=OPT} \
-  -suppress-warnings \
+  -Xcc -DGL_SILENCE_DEPRECATION \
   -I Sources/CMpv -I Sources/CFFmpeg -Xcc -I/opt/homebrew/include -L /opt/homebrew/lib -lmpv -lavformat -lavcodec -lswscale -lavutil -framework OpenGL \
   $(find Sources/Encore -name '*.swift') \
   -o "$APP/Contents/MacOS/Encore"

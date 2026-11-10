@@ -116,7 +116,7 @@ final class JellyfinSync {
 
     /// AIOStreams' packed item id: a1, kind<<4 | imdb (1), media type, the IMDb number
     /// (48 bits), season and episode (16 bits each, ffff for none), then zeros.
-    static func itemId(imdb: String, type: String, season: Int? = nil, episode: Int? = nil, kind: String? = nil) -> String? {
+    nonisolated static func itemId(imdb: String, type: String, season: Int? = nil, episode: Int? = nil, kind: String? = nil) -> String? {
         guard imdb.hasPrefix("tt"), let numeric = UInt64(imdb.dropFirst(2)) else { return nil }
         let kindCode: UInt8 = switch kind ?? (episode != nil ? "episode" : season != nil ? "season" : type == "movie" ? "movie" : "series") {
             case "movie": 1
@@ -143,7 +143,7 @@ final class JellyfinSync {
     }
 
     /// The other way: (IMDb id, kind, season, episode) for a packed IMDb id.
-    static func decode(_ id: String) -> (imdb: String, kind: Int, season: Int?, episode: Int?)? {
+    nonisolated static func decode(_ id: String) -> (imdb: String, kind: Int, season: Int?, episode: Int?)? {
         let hex = id.replacingOccurrences(of: "-", with: "").lowercased()
         guard hex.count == 32, hex.hasPrefix("a1") else { return nil }
         var b = [UInt8]()
@@ -201,17 +201,17 @@ final class JellyfinSync {
 
     func playbackStarted(meta: Meta, video: Video?, position: Double) {
         guard active, let id = itemId(meta: meta, video: video) else { return }
-        Task { await send("POST", "Sessions/Playing", body: ["ItemId": id, "PositionTicks": ticks(position), "CanSeek": true, "PlayMethod": "DirectPlay"]) }
+        Outbox.shared.send { [self] in await send("POST", "Sessions/Playing", body: ["ItemId": id, "PositionTicks": ticks(position), "CanSeek": true, "PlayMethod": "DirectPlay"]) }
     }
 
     func playbackProgress(meta: Meta, video: Video?, position: Double, paused: Bool) {
         guard active, let id = itemId(meta: meta, video: video) else { return }
-        Task { await send("POST", "Sessions/Playing/Progress", body: ["ItemId": id, "PositionTicks": ticks(position), "IsPaused": paused]) }
+        Outbox.shared.send { [self] in await send("POST", "Sessions/Playing/Progress", body: ["ItemId": id, "PositionTicks": ticks(position), "IsPaused": paused]) }
     }
 
     func playbackStopped(meta: Meta, video: Video?, position: Double, finished: Bool) {
         guard active, let id = itemId(meta: meta, video: video) else { return }
-        Task {
+        Outbox.shared.send { [self] in
             await send("POST", "Sessions/Playing/Stopped", body: ["ItemId": id, "PositionTicks": ticks(position)])
             if finished { await send("POST", "UserPlayedItems/\(id)", query: userQuery) }
         }
@@ -220,25 +220,25 @@ final class JellyfinSync {
     func setWatched(meta: Meta, videos: [Video], watched: Bool) {
         guard active else { return }
         let ids = videos.isEmpty ? [itemId(meta: meta, video: nil)].compactMap { $0 } : videos.compactMap { itemId(meta: meta, video: $0) }
-        Task { for id in ids { await send(watched ? "POST" : "DELETE", "UserPlayedItems/\(id)", query: userQuery) } }
+        Outbox.shared.send { [self] in for id in ids { await send(watched ? "POST" : "DELETE", "UserPlayedItems/\(id)", query: userQuery) } }
     }
 
     func playedUpTo(meta: Meta, video: Video) {
         guard active, let id = itemId(meta: meta, video: video) else { return }
-        Task { await send("POST", "AIOStreams/PlayedUpTo/\(id)") }
+        Outbox.shared.send { [self] in await send("POST", "AIOStreams/PlayedUpTo/\(id)") }
     }
 
     /// Removing from Continue Watching: the resume point goes back to the start, which takes
     /// the item out of the profile's Continue Watching without marking it played.
     func clearResume(imdb: String, type: String, season: Int?, episode: Int?) {
         guard active, let id = Self.itemId(imdb: imdb, type: type, season: season, episode: episode) else { return }
-        Task { await send("POST", "UserItems/\(id)/UserData", query: userQuery, body: ["PlaybackPositionTicks": 0]) }
+        Outbox.shared.send { [self] in await send("POST", "UserItems/\(id)/UserData", query: userQuery, body: ["PlaybackPositionTicks": 0]) }
     }
 
     /// Dropping a show is a "dislike" on the series in AIOStreams; picking it back up, a like.
     func setDropped(meta: Meta, dropped: Bool) {
         guard active, let imdb = meta.imdbId, let id = Self.itemId(imdb: imdb, type: meta.type) else { return }
-        Task { await send("POST", "UserItems/\(id)/Rating", query: userQuery.merging(["likes": dropped ? "false" : "true"]) { a, _ in a }) }
+        Outbox.shared.send { [self] in await send("POST", "UserItems/\(id)/Rating", query: userQuery.merging(["likes": dropped ? "false" : "true"]) { a, _ in a }) }
     }
 
     private var userQuery: [String: String] { userId.map { ["userId": $0] } ?? [:] }

@@ -340,9 +340,13 @@ enum DiscoveryService {
 
     private static let detailsCache = DetailsCache()
     private actor DetailsCache {
-        var store: [String: EpisodeDetails] = [:]
-        func get(_ k: String) -> EpisodeDetails? { store[k] }
-        func set(_ k: String, _ v: EpisodeDetails) { store[k] = v }
+        /// Kept six hours: a show still airing gets new episodes (and their stills).
+        var store: [String: (details: EpisodeDetails, at: Date)] = [:]
+        func get(_ k: String) -> EpisodeDetails? {
+            guard let hit = store[k], Date().timeIntervalSince(hit.at) < 6 * 3600 else { return nil }
+            return hit.details
+        }
+        func set(_ k: String, _ v: EpisodeDetails) { store[k] = (v, Date()) }
     }
 
     private struct TVmazeEpisode: Decodable {
