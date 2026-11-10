@@ -202,9 +202,9 @@ enum DebugHooks {
             guard let m = await app.fullMeta(type: type, id: metaId),
                   let s = (try? await app.streams(for: m, video: nil))?.first(where: \.isPlayable) else { print("[dl] no stream"); return }
             app.downloads.download(s, title: m.name)
-            for _ in 0..<8 {
+            for _ in 0..<15 {
                 try? await Task.sleep(for: .seconds(2))
-                if let i = app.downloads.items.first { print("[dl] \(i.name) state=\(i.state) \(i.received)/\(i.total)"); fflush(stdout) }
+                if let i = app.downloads.items.first { print("[dl] \(i.name) state=\(i.state) \(i.received)/\(i.total) speed=\(formatSpeed(i.speed)) \(i.secondsLeft.map(formatTimeLeft) ?? "-")"); fflush(stdout) }
             }
             if let i = app.downloads.items.first { app.downloads.dismiss(i.id) }
             print("[dl] cancelled"); fflush(stdout)

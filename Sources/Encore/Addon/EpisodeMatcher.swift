@@ -53,8 +53,12 @@ struct EpisodeMatcher: Sendable {
         // Not gated on the title looking like anime: IMDb-keyed listings (Cinemeta) only say
         // "Animation". ARM knows only anime, so for anything else this is one quick miss.
         if let imdb = meta.imdbId {
-            phrases = await PhraseCache.shared.phrases(imdb: imdb, season: season) {
-                await foreignTitlePhrases(imdb: imdb, season: season, baseTitle: meta.name)
+            // An extra, so it doesn't get to hold up Play for long on a slow connection.
+            let name = meta.name
+            phrases = await withinTime(4, fallback: []) {
+                await PhraseCache.shared.phrases(imdb: imdb, season: season) {
+                    await foreignTitlePhrases(imdb: imdb, season: season, baseTitle: name)
+                }
             }
         }
         // Regular episodes in the seasons before this one, for absolute numbering.

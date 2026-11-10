@@ -160,7 +160,12 @@ struct ContinueCard: View {
 
     private func resume() {
         Task {
+            // Something on screen while the details load on a slow connection.
+            if let preview = Meta.preview(of: entry.title) {
+                app.playStatus = PlayStatus(meta: preview, message: "Loading…")
+            }
             guard let meta = await app.fullMeta(type: entry.title.type, id: entry.title.id) else {
+                app.playStatus = nil
                 app.open(entry.title)
                 return
             }

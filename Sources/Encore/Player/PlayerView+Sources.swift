@@ -7,7 +7,7 @@ extension PlayerView {
     }
 
     /// Checks a stream like the start of playback does, then switches to it in place.
-    func switchStream(to s: StreamItem, player p: MPVController, resumeAt position: Double? = nil, onFailure: (() -> Void)? = nil) {
+    func switchStream(to s: StreamItem, player p: MPVController, resumeAt position: Double? = nil, onFailure: ((_ connectionDown: Bool) -> Void)? = nil) {
         guard checkingStream == nil else { return }
         let resumeAt = position ?? (p.position > 5 ? p.position : request.startAt)
         triedURLs.insert(s.url ?? "")
@@ -34,7 +34,11 @@ extension PlayerView {
                 p.load(url: url.absoluteString, headers: s.requestHeaders, startAt: resumeAt,
                        audioLanguages: audioLanguages)
             case .failed(let reason):
-                if let onFailure { onFailure() } else { p.errorMessage = "That stream didn't work: \(reason)" }
+                if let onFailure { onFailure(false) } else { p.errorMessage = "That stream didn't work: \(reason)" }
+            case .unreachable(let reason):
+                // Says nothing about this source, so it stays available to try.
+                if s.url != stream.url { triedURLs.remove(s.url ?? "") }
+                if let onFailure { onFailure(true) } else { p.errorMessage = "That stream didn't work: \(reason)" }
             }
         }
     }
@@ -43,14 +47,14 @@ extension PlayerView {
     /// episode: get a fresh link and carry on from the same spot, or failing that, another
     /// source. Nothing is marked watched and the next episode doesn't start.
     func recoverFromCutoff(_ p: MPVController) {
-        guard let at = p.cutOffAt, checkingStream == nil, !advancing else { return }
+        guard let at = p.cutOffAt, checkingStream == nil, !advancing, !waitingForConnection else { return }
         p.cutOffAt = nil
         let attempt = CutoffRecovery.after(cutoff, position: at)
         cutoff = attempt
         switch attempt.action {
         case .retrySameStream:
             showToast("Lost the stream, reconnecting")
-            switchStream(to: stream, player: p, resumeAt: at) { moveToAnotherStream(p, at: at) }
+            resume(with: stream, player: p, at: at) { moveToAnotherStream(p, at: at) }
         case .tryAnotherStream:
             moveToAnotherStream(p, at: at)
         case .giveUp:
@@ -67,7 +71,36 @@ extension PlayerView {
             return
         }
         showToast("Lost the stream, trying another source")
-        switchStream(to: alt, player: p, resumeAt: at) { moveToAnotherStream(p, at: at, tries: tries - 1) }
+        resume(with: alt, player: p, at: at) { moveToAnotherStream(p, at: at, tries: tries - 1) }
+    }
+
+    /// Switches to `s`. If it's the connection that's down, no source would work, so
+    /// none are used up: it waits for the connection instead.
+    private func resume(with s: StreamItem, player p: MPVController, at: Double, otherwise: @escaping () -> Void) {
+        switchStream(to: s, player: p, resumeAt: at) { connectionDown in
+            if connectionDown { waitForConnection(p, at: at, trying: s, otherwise: otherwise) } else { otherwise() }
+        }
+    }
+
+    private func waitForConnection(_ p: MPVController, at: Double, trying s: StreamItem, otherwise: @escaping () -> Void) {
+        guard !waitingForConnection else { return }
+        waitingForConnection = true
+        Task {
+            let deadline = Date().addingTimeInterval(CutoffRecovery.connectionPatience)
+            var pause = 2.0
+            while !tornDown, Date() < deadline {
+                try? await Task.sleep(for: .seconds(pause))
+                pause = min(pause * 1.5, 15)
+                guard !tornDown else { break }
+                if case .unreachable = await StreamProbe.check(s) { continue }
+                waitingForConnection = false
+                cutoff = nil // it was the connection, so the stream starts with a clean slate
+                resume(with: s, player: p, at: at, otherwise: otherwise)
+                return
+            }
+            waitingForConnection = false
+            if !tornDown { p.errorMessage = streamStoppedMessage(at) }
+        }
     }
 
     private func streamStoppedMessage(_ at: Double) -> String {

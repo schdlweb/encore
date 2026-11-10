@@ -14,6 +14,7 @@ extension PlayerView {
             guard let p = player, !tornDown else { continue }
             autoHideControls(p)
             trackProgress(p, tick: tick)
+            trackBuffering(p)
             reportPlayback(p, tick: tick)
             refreshReadouts(p, tick: tick)
             if p.fileLoaded { runOncePerFile(p) }
@@ -45,6 +46,21 @@ extension PlayerView {
         if tick % 30 == 0, unloggedWatchTime > 0 {
             app.watch.logWatchTime(unloggedWatchTime, isMovie: request.video == nil)
             unloggedWatchTime = 0
+        }
+    }
+
+    /// Runs out of buffer again and again: the file's too big for this connection. Wait
+    /// for more before resuming (fewer, longer stops), and say what would help.
+    private func trackBuffering(_ p: MPVController) {
+        defer { wasBuffering = p.buffering }
+        guard p.fileLoaded, p.buffering, !wasBuffering, !p.seeking else { return }
+        let now = Date()
+        rebuffers = rebuffers.filter { now.timeIntervalSince($0) < 120 } + [now]
+        guard rebuffers.count >= 3, !once.slowConnectionHint else { return }
+        once.slowConnectionHint = true
+        p.setRebufferWait(seconds: 8)
+        if request.alternatives.filter(\.isPlayable).count > 1 {
+            showToast("Buffering a lot. A smaller source in the gear menu may play better")
         }
     }
 
@@ -123,9 +139,12 @@ extension PlayerView {
     /// background.
     private func preparePreviews(_ p: MPVController) {
         guard app.settings.scrubPreviews else { return }
-        if thumbs == nil, p.duration > 0, let since = playingSince, Date().timeIntervalSince(since) > 2 {
+        // Only with a healthy buffer: on a weak connection they'd take bandwidth from the video.
+        let tight = p.buffering || p.cacheSeconds < 10
+        if thumbs == nil, !tight, p.duration > 0, let since = playingSince, Date().timeIntervalSince(since) > 2 {
             makeThumbnailer(p)
         }
+        thumbs?.setBackgroundPaused(tight)
         if let t = thumbs, !thumbsSweeping {
             thumbsSweeping = true
             t.prefetch()
@@ -149,7 +168,8 @@ extension PlayerView {
 
     /// At the end of the file: on to the next episode, or close.
     private func finishIfEnded(_ p: MPVController) {
-        guard p.endedNaturally, !advancing else { return }
+        guard p.endedNaturally, !advancing, !once.endOfFile else { return }
+        once.endOfFile = true
         saveProgress()
         if app.settings.autoplayNext, let next = nextVideo { playNext(next) } else { close() }
     }
@@ -240,6 +260,15 @@ extension PlayerView {
         ))
     }
 
+    /// An addon subtitle once it has downloaded and become a track (up to 20 s).
+    private func addedSubtitle(_ p: MPVController, where matches: (MediaTrack) -> Bool) async -> MediaTrack? {
+        for _ in 0..<80 {
+            if let track = p.subtitleTracks.first(where: { $0.isExternal && matches($0) }) { return track }
+            try? await Task.sleep(for: .milliseconds(250))
+        }
+        return nil
+    }
+
     func loadAddonSubtitles(_ p: MPVController) async {
         let limit = app.settings.addonSubtitleLimit
         guard limit > 0, app.manifest?.supports("subtitles") == true, let client = app.client else { return }
@@ -257,8 +286,7 @@ extension PlayerView {
         // Subtitles picked for this title that the file itself doesn't have: the addon's.
         if let saved {
             guard !p.subtitleTracks.contains(where: { !$0.isExternal && $0.lang.map(normalizeLang) == saved }) else { return }
-            try? await Task.sleep(for: .seconds(2))
-            if let track = p.subtitleTracks.first(where: { $0.isExternal && $0.lang.map(normalizeLang) == saved }) {
+            if let track = await addedSubtitle(p, where: { $0.lang.map(normalizeLang) == saved }) {
                 p.selectSubtitle(track.id)
             }
             return
@@ -266,8 +294,7 @@ extension PlayerView {
         if app.trackChoiceSubtitlesOff(request.meta.id) { return }
         // If the file had nothing in a preferred language, turn the first addon track on.
         if app.settings.subtitlesOnByDefault, !embeddedPreferred, p.selectedSubtitle == nil, !wanted.isEmpty {
-            try? await Task.sleep(for: .seconds(2))
-            if let first = p.subtitleTracks.first(where: \.isExternal) { p.selectSubtitle(first.id) }
+            if let first = await addedSubtitle(p, where: { _ in true }), p.selectedSubtitle == nil { p.selectSubtitle(first.id) }
         }
     }
 

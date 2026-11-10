@@ -6,10 +6,13 @@ extension PlayerView {
 
     @ViewBuilder
     func overlays(_ p: MPVController) -> some View {
-        if (!p.fileLoaded || p.buffering || p.seeking || checkingStream != nil) && p.errorMessage == nil {
+        if (!p.fileLoaded || p.buffering || p.seeking || checkingStream != nil || waitingForConnection) && p.errorMessage == nil {
             VStack(spacing: 14) {
                 ProgressView().controlSize(.large).tint(.white)
-                if let s = checkingStream {
+                if waitingForConnection {
+                    Text("Waiting for the connection…").font(.system(size: 14, weight: .semibold)).foregroundStyle(.white)
+                    Text("Playback continues from here when it's back.").font(.system(size: 12)).foregroundStyle(.white.opacity(0.6))
+                } else if let s = checkingStream {
                     Text("Checking stream…").font(.system(size: 14, weight: .semibold)).foregroundStyle(.white)
                     Text(s.oneLine).font(.system(size: 12)).foregroundStyle(.white.opacity(0.6)).lineLimit(1)
                 } else if !p.fileLoaded {
@@ -17,7 +20,7 @@ extension PlayerView {
                         .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(.white.opacity(0.7))
                 }
-                if p.fileLoaded, p.buffering {
+                if p.fileLoaded, p.buffering, !waitingForConnection {
                     Text("Buffering…").font(.system(size: 13)).foregroundStyle(.white.opacity(0.7))
                 }
             }
@@ -376,9 +379,13 @@ extension PlayerView {
             Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 34)).foregroundStyle(.orange)
             Text(message).multilineTextAlignment(.center).frame(maxWidth: 520)
             HStack {
+                if let p = player {
+                    Button("Try Again") { cutoff = nil; switchStream(to: stream, player: p) }
+                        .buttonStyle(PillButtonStyle(kind: .primary))
+                }
                 if let alt = nextUntriedStream, let p = player {
                     Button("Try Next Stream") { switchStream(to: alt, player: p) }
-                        .buttonStyle(PillButtonStyle(kind: .primary))
+                        .buttonStyle(PillButtonStyle())
                 }
                 Button("Close") { close() }.buttonStyle(PillButtonStyle())
             }

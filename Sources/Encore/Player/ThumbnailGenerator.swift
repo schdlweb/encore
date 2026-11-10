@@ -48,6 +48,8 @@ final class ThumbnailGenerator: @unchecked Sendable {
     private var ahead: [Double] = []
     private var lastRequest: Double?
     private var sweeping = false
+    /// Playback needs the connection more than the background fill does right now.
+    private var backgroundPaused = false
     private let deliver: @MainActor (Double, CGImage) -> Void
     private let url: String
     private let headers: [String: String]
@@ -137,6 +139,17 @@ final class ThumbnailGenerator: @unchecked Sendable {
                     if seen.insert(Int(t * 10)).inserted { self.sweep.append(t) }
                 }
             }
+            self.reopenIfIdle()
+            self.pump()
+        }
+    }
+
+    /// Stops or restarts the background fill; hovering still works either way.
+    func setBackgroundPaused(_ paused: Bool) {
+        queue.async {
+            guard paused != self.backgroundPaused else { return }
+            self.backgroundPaused = paused
+            guard !paused, self.sweeping else { return }
             self.reopenIfIdle()
             self.pump()
         }
@@ -242,7 +255,7 @@ final class ThumbnailGenerator: @unchecked Sendable {
     private func scheduleIdleClose() {
         idleClose?.cancel()
         let work = DispatchWorkItem { [weak self] in
-            guard let self, self.ready, !self.busy, self.pending == nil, self.ahead.isEmpty, self.sweep.isEmpty else { return }
+            guard let self, self.ready, !self.busy, self.pending == nil, self.ahead.isEmpty, self.sweep.isEmpty || self.backgroundPaused else { return }
             self.close()
             self.closedForIdle = true
         }
@@ -267,7 +280,7 @@ final class ThumbnailGenerator: @unchecked Sendable {
             pending = nil
         } else if let next = nextAhead() {
             t = next
-        } else if let next = nextSweep() {
+        } else if !backgroundPaused, let next = nextSweep() {
             t = next
             background = true
         } else {

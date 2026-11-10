@@ -101,8 +101,10 @@ final class SimklSync {
 
     // MARK: Requests
 
-    private func post(_ path: String, _ body: [String: Any]) async {
-        guard let token, let url = URL(string: "https://api.simkl.com" + path) else { return }
+    /// False if it's worth trying again later.
+    @discardableResult
+    private func post(_ path: String, _ body: [String: Any]) async -> Bool {
+        guard let token, let url = URL(string: "https://api.simkl.com" + path) else { return true }
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.timeoutInterval = 15
@@ -110,10 +112,14 @@ final class SimklSync {
         req.setValue(clientId, forHTTPHeaderField: "simkl-api-key")
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         req.httpBody = try? JSONSerialization.data(withJSONObject: body)
-        if let (_, resp) = try? await URLSession.shared.data(for: req), (resp as? HTTPURLResponse)?.statusCode == 401 {
+        guard let (_, resp) = try? await URLSession.shared.data(for: req) else { return false }
+        let code = (resp as? HTTPURLResponse)?.statusCode ?? 200
+        if code == 401 {
             Keychain.set(nil, for: "simkl.token")
             status = .failed("Simkl signed Encore out; sign in again.")
+            return true
         }
+        return code < 500 && code != 429
     }
 
     /// `movie`/`show` + `episode` for a title, by IMDb id.
@@ -243,7 +249,11 @@ final class SimklSync {
     func scrobble(_ action: String, meta: Meta, video: Video?, position: Double, duration: Double) {
         guard active, duration > 0, var body = subject(meta: meta, video: video) else { return }
         body["progress"] = min(100, max(0, position / duration * 100))
-        Outbox.shared.send { [self] in await post("/scrobble/\(action)", body) }
+        if action == "stop" {
+            Outbox.shared.sendReliably { [self] in await post("/scrobble/\(action)", body) }
+        } else {
+            Outbox.shared.send { [self] in await post("/scrobble/\(action)", body) }
+        }
     }
 
     func setWatched(meta: Meta, videos: [Video], watched: Bool) {
@@ -256,6 +266,6 @@ final class SimklSync {
             body = ["shows": [["ids": ["imdb": imdb],
                                "seasons": bySeason.map { ["number": $0.key, "episodes": $0.value.map { ["number": $0.episode!] }] }]]]
         }
-        Outbox.shared.send { [self] in await post(watched ? "/sync/history" : "/sync/history/remove", body) }
+        Outbox.shared.sendReliably { [self] in await post(watched ? "/sync/history" : "/sync/history/remove", body) }
     }
 }

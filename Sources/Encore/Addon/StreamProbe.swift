@@ -13,6 +13,8 @@ enum StreamProbe {
     enum Result {
         case playable(URL)
         case failed(String)
+        /// Couldn't get an answer at all: the connection, not the stream.
+        case unreachable(String)
     }
 
     private static let session: URLSession = {
@@ -72,12 +74,19 @@ enum StreamProbe {
             }
             return .playable(final)
         } catch let e as URLError where e.code == .timedOut {
-            return .failed("Timed out waiting for the debrid service")
+            return .unreachable("Timed out waiting for the debrid service")
         } catch is CancellationError {
             return .failed("Cancelled")
+        } catch let e as URLError where isConnectionProblem(e.code) {
+            return .unreachable(e.localizedDescription)
         } catch {
             return .failed(error.localizedDescription)
         }
+    }
+
+    static func isConnectionProblem(_ code: URLError.Code) -> Bool {
+        [.notConnectedToInternet, .networkConnectionLost, .cannotFindHost, .cannotConnectToHost,
+         .dnsLookupFailed, .timedOut, .dataNotAllowed, .internationalRoamingOff].contains(code)
     }
 
     static func errorVideoReason(_ url: URL) -> String? {

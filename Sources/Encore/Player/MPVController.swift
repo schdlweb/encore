@@ -233,6 +233,7 @@ final class MPVController {
         endedNaturally = false
         cutOffAt = nil
         stalledChecks = 0
+        lastError = nil
         if atEndOfData {
             atEndOfData = false
             setPaused(false)
@@ -280,6 +281,8 @@ final class MPVController {
     func selectAudio(_ id: Int) { setAsync("aid", String(id)) }
     func selectSubtitle(_ id: Int?) { setAsync("sid", id.map(String.init) ?? "no") }
     func setSubtitleDelay(_ seconds: Double) { setAsync("sub-delay", String(seconds)) }
+    /// How much must be buffered before playback resumes after running out.
+    func setRebufferWait(seconds: Int) { setAsync("cache-pause-wait", String(seconds)) }
     func setAudioDelay(_ seconds: Double) { setAsync("audio-delay", String(seconds)) }
 
     /// A readable snapshot of what is actually playing, for the info panel.
@@ -433,17 +436,20 @@ final class MPVController {
     /// changes, so a reload that runs out of data again right away (true, then true) goes
     /// unreported and playback would sit on the last frame for good.
     func checkEndOfData() {
-        guard fileLoaded else { return }
+        // Once the error card is up, nothing more happens until the user picks something.
+        guard fileLoaded, errorMessage == nil else { return }
         let stalled = updateStall()
         if getFlag("eof-reached") {
             guard !atEndOfData else { return }
             atEndOfData = true
-            reportStop(at: getDouble("time-pos") ?? position)
+            // Never further than playback has actually got: a position that jumps as the
+            // data runs out mustn't read as having reached the end.
+            reportStop(at: min(getDouble("time-pos") ?? position, position + 5))
         } else {
             atEndOfData = false
             // Resumed onto a dead link, mpv can sit there "playing" forever without ever
             // reporting the end of the data.
-            if stalled, errorMessage == nil, cutOffAt == nil { reportStop(at: position) }
+            if stalled, cutOffAt == nil { reportStop(at: position) }
         }
     }
 
@@ -457,9 +463,11 @@ final class MPVController {
     /// 30 s at two checks a second, the same patience mpv's own network timeout has.
     private static let checksBeforeStalled = 60
 
-    /// True once, when playback has gone 30 s without moving (a pause doesn't count).
+    /// True once, when playback has gone 30 s without moving and with nothing arriving.
+    /// A pause doesn't count, and neither does a slow connection: data still coming in
+    /// means it's filling the buffer, however long that takes.
     private func updateStall() -> Bool {
-        guard !paused, position == lastCheckedPosition else {
+        guard !paused, position == lastCheckedPosition, (getInt("cache-speed") ?? 0) == 0 else {
             lastCheckedPosition = position
             stalledChecks = 0
             return false

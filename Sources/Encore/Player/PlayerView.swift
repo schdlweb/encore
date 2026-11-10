@@ -16,6 +16,8 @@ struct OncePerFile {
     var dolbyVision = false
     var subtitles = false
     var wrongFile = false
+    var endOfFile = false
+    var slowConnectionHint = false
 }
 
 /// What to do when a stream stops well before the end of the video.
@@ -24,6 +26,9 @@ struct CutoffRecovery: Equatable {
 
     var position: Double
     var attempts: Int
+
+    /// How long to keep checking for a lost connection before giving up.
+    static let connectionPatience: Double = 300
 
     /// Playing this far past the last cutoff counts as having recovered from it.
     static let progressThatCounts: Double = 30
@@ -88,6 +93,11 @@ struct PlayerView: View {
     @State var once = OncePerFile()
     /// The last time the stream cut out before the end, and how often it has there.
     @State var cutoff: CutoffRecovery?
+    /// Offline (or close to it): checking for the connection to come back.
+    @State var waitingForConnection = false
+    @State var wasBuffering = false
+    /// When playback recently ran out of buffer.
+    @State var rebuffers: [Date] = []
     @State var currentURL: URL
     @State var checkingStream: StreamItem?
     @State var triedURLs: Set<String> = []
@@ -198,6 +208,8 @@ struct PlayerView: View {
         .onAppear(perform: start)
         .onDisappear(perform: teardown)
         .task { await housekeeping() }
+        // The next episode didn't start (or that was cancelled): the buttons work again.
+        .onChange(of: app.playStatus?.phase) { _, phase in if phase != .working { advancing = false } }
     }
 
     // MARK: Lifecycle

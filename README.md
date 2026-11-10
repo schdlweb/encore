@@ -82,7 +82,10 @@ installed, either workaround can be dropped.
   Odin pick up where Encore left off, and the other way round) and with Simkl. Both are
   off until you sign in under Settings.
 - **Downloads**: right-click a stream to save it to `~/Downloads`; it's checked first, like
-  before playing.
+  before playing. Shows speed and time left, and picks up after a dropped connection.
+- **Bad connections**: a dropped stream reconnects and carries on from the same spot,
+  waiting up to 5 minutes if you're offline, and moves to another source if that one's dead.
+  A slow connection just keeps buffering, and previews stop downloading until there's room.
 - **Updates**: Encore checks GitHub releases on launch (and from Encore ▸ Check for
   Updates…), downloads the new version, checks it against the release's SHA-256 and its
   signature, swaps itself and relaunches. If the new copy won't open, the old one is put back.

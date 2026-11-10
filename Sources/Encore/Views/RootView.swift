@@ -237,13 +237,17 @@ struct DownloadsPanel: View {
                     HStack(spacing: 8) {
                         Text(item.name).font(.system(size: 12, weight: .semibold)).lineLimit(1).truncationMode(.middle)
                         Spacer(minLength: 4)
+                        if case .failed = item.state {
+                            Button { app.downloads.retry(item.id) } label: { Image(systemName: "arrow.clockwise") }
+                                .buttonStyle(.plain).help("Try again")
+                        }
                         if case .finished(let url) = item.state {
                             Button { app.downloads.reveal(url) } label: { Image(systemName: "magnifyingglass") }
                                 .buttonStyle(.plain).help("Show in Finder")
                         }
                         Button { app.downloads.dismiss(item.id) } label: { Image(systemName: "xmark") }
                             .buttonStyle(.plain)
-                            .help(item.state == .downloading || item.state == .checking ? "Cancel download" : "Dismiss")
+                            .help(item.isActive ? "Cancel download" : "Dismiss")
                     }
                     switch item.state {
                     case .checking:
@@ -254,6 +258,10 @@ struct DownloadsPanel: View {
                         caption(item.total > 0
                                 ? "\(bytes(item.received)) of \(bytes(item.total)) · \(Int(item.fraction * 100))%"
                                 : bytes(item.received))
+                        caption(speedLine(item))
+                    case .reconnecting:
+                        ProgressView(value: item.fraction).progressViewStyle(.linear).controlSize(.small)
+                        caption("Connection lost, trying again…")
                     case .finished:
                         caption("Saved to Downloads")
                     case .failed(let reason):
@@ -272,6 +280,11 @@ struct DownloadsPanel: View {
 
     private func caption(_ text: String) -> some View {
         Text(text).font(.system(size: 11)).foregroundStyle(Theme.textSecondary).lineLimit(1)
+    }
+
+    private func speedLine(_ item: DownloadManager.Item) -> String {
+        guard item.speed > 0 else { return item.received > 0 ? "Waiting for data…" : "Starting…" }
+        return [formatSpeed(item.speed), item.secondsLeft.map(formatTimeLeft)].compactMap { $0 }.joined(separator: " · ")
     }
 
     private func bytes(_ n: Int64) -> String {

@@ -181,6 +181,7 @@ final class JellyfinSync {
             req.httpBody = try? JSONSerialization.data(withJSONObject: body)
         }
         guard let (data, resp) = try? await URLSession.shared.data(for: req) else { return nil }
+        if ((resp as? HTTPURLResponse)?.statusCode ?? 200) >= 500 { return nil }
         if (resp as? HTTPURLResponse)?.statusCode == 401 {
             // The token was revoked (e.g. signed out from AIOStreams): sign back in with the
             // saved password if there is one, else ask.
@@ -211,34 +212,56 @@ final class JellyfinSync {
 
     func playbackStopped(meta: Meta, video: Video?, position: Double, finished: Bool) {
         guard active, let id = itemId(meta: meta, video: video) else { return }
-        Outbox.shared.send { [self] in
-            await send("POST", "Sessions/Playing/Stopped", body: ["ItemId": id, "PositionTicks": ticks(position)])
-            if finished { await send("POST", "UserPlayedItems/\(id)", query: userQuery) }
-        }
+        var requests = [Request("POST", "Sessions/Playing/Stopped", body: ["ItemId": id, "PositionTicks": ticks(position)])]
+        if finished { requests.append(Request("POST", "UserPlayedItems/\(id)", query: userQuery)) }
+        deliver(requests)
     }
 
     func setWatched(meta: Meta, videos: [Video], watched: Bool) {
         guard active else { return }
         let ids = videos.isEmpty ? [itemId(meta: meta, video: nil)].compactMap { $0 } : videos.compactMap { itemId(meta: meta, video: $0) }
-        Outbox.shared.send { [self] in for id in ids { await send(watched ? "POST" : "DELETE", "UserPlayedItems/\(id)", query: userQuery) } }
+        deliver(ids.map { Request(watched ? "POST" : "DELETE", "UserPlayedItems/\($0)", query: userQuery) })
     }
 
     func playedUpTo(meta: Meta, video: Video) {
         guard active, let id = itemId(meta: meta, video: video) else { return }
-        Outbox.shared.send { [self] in await send("POST", "AIOStreams/PlayedUpTo/\(id)") }
+        deliver([Request("POST", "AIOStreams/PlayedUpTo/\(id)")])
     }
 
     /// Removing from Continue Watching: the resume point goes back to the start, which takes
     /// the item out of the profile's Continue Watching without marking it played.
     func clearResume(imdb: String, type: String, season: Int?, episode: Int?) {
         guard active, let id = Self.itemId(imdb: imdb, type: type, season: season, episode: episode) else { return }
-        Outbox.shared.send { [self] in await send("POST", "UserItems/\(id)/UserData", query: userQuery, body: ["PlaybackPositionTicks": 0]) }
+        deliver([Request("POST", "UserItems/\(id)/UserData", query: userQuery, body: ["PlaybackPositionTicks": 0])])
     }
 
     /// Dropping a show is a "dislike" on the series in AIOStreams; picking it back up, a like.
     func setDropped(meta: Meta, dropped: Bool) {
         guard active, let imdb = meta.imdbId, let id = Self.itemId(imdb: imdb, type: meta.type) else { return }
-        Outbox.shared.send { [self] in await send("POST", "UserItems/\(id)/Rating", query: userQuery.merging(["likes": dropped ? "false" : "true"]) { a, _ in a }) }
+        deliver([Request("POST", "UserItems/\(id)/Rating", query: userQuery.merging(["likes": dropped ? "false" : "true"]) { a, _ in a })])
+    }
+
+    private struct Request {
+        var method: String
+        var path: String
+        var query: [String: String] = [:]
+        var body: [String: Any]? = nil
+        init(_ method: String, _ path: String, query: [String: String] = [:], body: [String: Any]? = nil) {
+            self.method = method; self.path = path; self.query = query; self.body = body
+        }
+    }
+
+    /// Sends these in order, retrying through a bad patch of network from wherever it got to.
+    private func deliver(_ requests: [Request]) {
+        var left = requests
+        Outbox.shared.sendReliably { [self] in
+            while let r = left.first {
+                guard active else { return true } // signed out: nobody to tell
+                guard await send(r.method, r.path, query: r.query, body: r.body) != nil else { return false }
+                left.removeFirst()
+            }
+            return true
+        }
     }
 
     private var userQuery: [String: String] { userId.map { ["userId": $0] } ?? [:] }

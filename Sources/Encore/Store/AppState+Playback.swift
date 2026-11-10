@@ -22,14 +22,14 @@ extension AppState {
         playTask?.cancel()
         playTask = Task {
             playStatus = PlayStatus(meta: meta, video: video, message: "Checking stream…", detail: stream.oneLine)
-            async let languages = audioLanguages(for: meta)
+            async let languages = boundedAudioLanguages(for: meta)
             switch await check(stream) {
             case .playable(let url):
                 let alang = await languages
                 guard !Task.isCancelled else { return }
                 playStatus = nil
                 play(meta: meta, video: video, stream: stream, url: url, alternatives: alternatives, audioLanguages: alang)
-            case .failed(let reason):
+            case .failed(let reason), .unreachable(let reason):
                 guard !Task.isCancelled else { return }
                 playStatus = PlayStatus(meta: meta, video: video, phase: .failed,
                                         message: "That stream didn't work", detail: reason)
@@ -47,7 +47,7 @@ extension AppState {
         prewarmTask?.cancel()
         var status = PlayStatus(meta: meta, video: video, message: "Finding streams…")
         playStatus = status
-        async let languages = audioLanguages(for: meta)
+        async let languages = boundedAudioLanguages(for: meta)
         let found: PreparedStreams
         do {
             found = try await preparedStreams(meta: meta, video: video).value
@@ -73,6 +73,7 @@ extension AppState {
             checks[i] = Task { await self.check(stream) }
         }
         defer { checks.values.forEach { $0.cancel() } }
+        var unreachableCount = 0
         launch(0)
         for (i, stream) in candidates.enumerated() {
             launch(i + 1)
@@ -91,6 +92,9 @@ extension AppState {
                 return
             case .failed(let reason):
                 status.failures.append("\(stream.oneLine): \(reason)")
+            case .unreachable(let reason):
+                unreachableCount += 1
+                status.failures.append("\(stream.oneLine): \(reason)")
             }
         }
 
@@ -101,6 +105,9 @@ extension AppState {
         } else if candidates.isEmpty {
             status.message = "No playable streams"
             status.detail = "Only torrent or external results came back; those need a debrid service in AIOStreams."
+        } else if unreachableCount == candidates.count {
+            status.message = "Can't reach the streams"
+            status.detail = "Check your connection and try again."
         } else {
             status.message = "None of the top \(candidates.count) streams worked"
             status.detail = nil
@@ -136,7 +143,10 @@ extension AppState {
         prepared[key] = (task, Date())
         prepared = prepared.filter { Date().timeIntervalSince($0.value.at) < 15 * 60 }
         Task {
-            if case .failure = await task.result, prepared[key]?.task == task { prepared[key] = nil }
+            // An empty answer isn't kept either: it's often the addon having a bad moment.
+            let result = await task.result
+            let useless = (try? result.get())?.streams.isEmpty ?? true
+            if useless, prepared[key]?.task == task { prepared[key] = nil }
         }
         return task
     }
@@ -199,6 +209,17 @@ extension AppState {
 
     /// mpv `alang` for a title: its original language when that setting is on (with the
     /// manual list as a fallback), otherwise the manual list.
+    /// `audioLanguages`, but Play doesn't wait more than a few seconds for the lookup. It
+    /// still finishes in the background, so the next episode has the answer.
+    func boundedAudioLanguages(for meta: Meta) async -> String? {
+        let manual = settings.preferredAudioLanguages.trimmingCharacters(in: .whitespaces)
+        var fallback: String? = manual.isEmpty ? nil : manual
+        if settings.preferOriginalAudio, meta.isAnimeLike {
+            fallback = (languageCodes("jpn") + (manual.isEmpty ? [] : [manual])).joined(separator: ",")
+        }
+        return await withinTime(5, fallback: fallback) { [self] in await audioLanguages(for: meta) }
+    }
+
     func audioLanguages(for meta: Meta) async -> String? {
         let key = "\(settings.preferOriginalAudio)|\(settings.preferredAudioLanguages)|\(meta.id)"
         if let hit = languageCache[key] { return hit }

@@ -79,8 +79,11 @@ final class CatalogRowModel: Identifiable {
         Task { await loadIfNeeded(client) }
     }
 
+    /// After a page fails to load, how soon scrolling to the end may ask again.
+    @ObservationIgnored private var nextPageAllowedAt = Date.distantPast
+
     func loadMore(_ client: AddonClient?) async {
-        guard state == .loaded, !reachedEnd, def.supports("skip"), let client else { return }
+        guard state == .loaded, !reachedEnd, def.supports("skip"), let client, Date() >= nextPageAllowedAt else { return }
         state = .loading
         do {
             let page = try await client.catalog(def, skip: items.count)
@@ -89,7 +92,7 @@ final class CatalogRowModel: Identifiable {
             items += fresh
             reachedEnd = fresh.isEmpty
         } catch {
-            reachedEnd = true
+            nextPageAllowedAt = Date().addingTimeInterval(10)
         }
         state = .loaded
     }
@@ -194,6 +197,7 @@ final class AppState {
     /// after an hour (that's how a new episode is noticed while Encore stays open);
     /// movies after a day.
     private var metaCache: [String: (meta: Meta, at: Date)] = [:]
+    @ObservationIgnored private var metaFetches: [String: Task<Meta?, Never>] = [:]
 
     private func cachedMeta(_ id: String, allowStale: Bool = false) -> Meta? {
         guard let hit = metaCache[id] else { return nil }
@@ -271,14 +275,31 @@ final class AppState {
 
     // MARK: Addon
 
-    func connect() async {
-        connection = .loading
+    @ObservationIgnored private var connectRetry: Task<Void, Never>?
+    @ObservationIgnored private var connectRetryDelay: Double = 5
+
+    private static func isTemporary(_ error: Error) -> Bool {
+        switch error {
+        case is URLError: true
+        case AddonError.http(let code, _): code >= 500
+        default: false
+        }
+    }
+
+    /// `quietly` is the automatic retry: the screen doesn't change unless it works.
+    func connect(quietly: Bool = false) async {
+        if !quietly {
+            connectRetry?.cancel()
+            connectRetryDelay = 5
+            connection = .loading
+        }
         do {
             let client = try AddonClient(manifestURL: settings.manifestURL)
             let manifest = try await client.manifest()
             self.client = client
             self.manifest = manifest
             metaCache = [:]
+            metaFetches = [:]
             prepared = [:]
             probed = [:]
             rowModels = [:]
@@ -291,6 +312,16 @@ final class AppState {
             if let latest = watch.continueWatching.first { prewarm(latest) }
         } catch {
             connection = .failed(error.localizedDescription)
+            // Opened before the network was up (or waking from sleep): keep trying.
+            if manifest == nil, Self.isTemporary(error) {
+                let delay = connectRetryDelay
+                connectRetryDelay = min(delay * 2, 60)
+                connectRetry = Task { [weak self] in
+                    try? await Task.sleep(for: .seconds(delay))
+                    guard !Task.isCancelled else { return }
+                    await self?.connect(quietly: true)
+                }
+            }
         }
     }
 
@@ -379,29 +410,44 @@ final class AppState {
     }
 
     func fullMeta(_ preview: Meta) async -> Meta? {
-        if let m = cachedMeta(preview.id) { return m }
-        guard let client else { return nil }
-        async let title = SearchService.imdbTitle(preview.id)
-        // Couldn't refresh (offline, addon down): the copy from earlier is better than nothing.
-        guard var full = try? await client.meta(type: preview.type, id: preview.id) else {
-            return cachedMeta(preview.id, allowStale: true)
-        }
-        if let t = await title { full.name = t }
-        let merged = await addingMissingAnimeSeasons(preview.merged(with: full))
-        metaCache[preview.id] = (merged, Date())
-        return merged
+        await meta(id: preview.id, type: preview.type, preview: preview, mustBeFresh: false)
     }
 
-    func fullMeta(type: String, id: String) async -> Meta? {
+    /// `mustBeFresh` waits for a refresh of details that have expired; otherwise the
+    /// earlier copy comes back at once and the refresh happens behind it.
+    func fullMeta(type: String, id: String, mustBeFresh: Bool = false) async -> Meta? {
+        await meta(id: id, type: type, preview: nil, mustBeFresh: mustBeFresh)
+    }
+
+    private func meta(id: String, type: String, preview: Meta?, mustBeFresh: Bool) async -> Meta? {
         if let m = cachedMeta(id) { return m }
-        guard let client else { return nil }
-        async let title = SearchService.imdbTitle(id)
-        guard var full = try? await client.meta(type: type, id: id) else { return cachedMeta(id, allowStale: true) }
-        // The addon names some titles by their original title; IMDb's is the English one.
-        if let t = await title { full.name = t }
-        let completed = await addingMissingAnimeSeasons(full)
-        metaCache[id] = (completed, Date())
-        return completed
+        if !mustBeFresh, let stale = cachedMeta(id, allowStale: true) {
+            _ = fetchMeta(id: id, type: type, preview: preview)
+            return stale
+        }
+        return await fetchMeta(id: id, type: type, preview: preview).value
+    }
+
+    /// One request per title, however many things are waiting for it.
+    private func fetchMeta(id: String, type: String, preview: Meta?) -> Task<Meta?, Never> {
+        if let running = metaFetches[id] { return running }
+        let task = Task<Meta?, Never> { [client] in
+            defer { metaFetches[id] = nil }
+            guard let client else { return nil }
+            // The English title is a nicety; the details shouldn't wait long for it.
+            async let title = withinTime(3, fallback: nil) { await SearchService.imdbTitle(id) }
+            // Couldn't refresh (offline, addon down): the copy from earlier is better than nothing.
+            guard var full = try? await client.meta(type: type, id: id) else {
+                return cachedMeta(id, allowStale: true)
+            }
+            // The addon names some titles by their original title; IMDb's is the English one.
+            if let t = await title { full.name = t }
+            let merged = await addingMissingAnimeSeasons(preview?.merged(with: full) ?? full)
+            metaCache[id] = (merged, Date())
+            return merged
+        }
+        metaFetches[id] = task
+        return task
     }
 
     /// IMDb-keyed listings of anime often stop at the first season while anime databases
@@ -462,11 +508,10 @@ final class AppState {
     func open(_ person: CastMember, context: String? = nil) { routes.append(.person(person, context: context)) }
     func back() { _ = routes.popLast() }
 
+    /// Opens the page straight away with what's saved; it fills in as the details arrive.
     func open(_ saved: SavedTitle) {
-        Task {
-            let m = await fullMeta(type: saved.type, id: saved.id)
-            if let m { open(m) }
-        }
+        if case .detail(let current)? = routes.last, current.id == saved.id { return }
+        if let preview = Meta.preview(of: saved) { open(preview) }
     }
 }
 

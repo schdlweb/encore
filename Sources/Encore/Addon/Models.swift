@@ -221,6 +221,19 @@ extension Video {
     }
 }
 
+extension Meta {
+    /// What's known of a saved title, to open its page at once while the rest loads.
+    static func preview(of t: SavedTitle) -> Meta? {
+        var fields: [String: Any] = ["id": t.id, "type": t.type, "name": t.name]
+        if let v = t.poster { fields["poster"] = v }
+        if let v = t.background { fields["background"] = v }
+        if let v = t.logo { fields["logo"] = v }
+        if let v = t.releaseInfo { fields["releaseInfo"] = v }
+        guard let data = try? JSONSerialization.data(withJSONObject: fields) else { return nil }
+        return try? JSONDecoder().decode(Meta.self, from: data)
+    }
+}
+
 func parseISODate(_ s: String) -> Date? {
     let f = ISO8601DateFormatter()
     f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]

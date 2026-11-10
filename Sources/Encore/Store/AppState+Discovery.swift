@@ -17,24 +17,32 @@ extension AppState {
             .prefix(25)
         var found: [UpcomingEpisode] = []
         var fresh: [WatchEntry] = []
-        await withTaskGroup(of: (UpcomingEpisode?, WatchEntry?).self) { group in
+        var unavailable = Set<String>()
+        await withTaskGroup(of: (UpcomingEpisode?, WatchEntry?, String?).self) { group in
             for title in followed {
                 group.addTask { @MainActor in
-                    guard let meta = await self.fullMeta(type: title.type, id: title.id) else { return (nil, nil) }
+                    guard let meta = await self.fullMeta(type: title.type, id: title.id, mustBeFresh: true) else { return (nil, nil, title.id) }
                     let now = Date()
                     let newEpisode = self.newEpisode(of: meta, now: now)
                     let next = meta.videos
                         .filter { ($0.season ?? 1) > 0 && ($0.released ?? .distantPast) > now }
                         .min { ($0.released ?? .distantFuture) < ($1.released ?? .distantFuture) }
-                    guard let next else { return (nil, newEpisode) }
+                    guard let next else { return (nil, newEpisode, nil) }
                     let lengths = await DiscoveryService.episodeDetails(for: meta)
-                    return (UpcomingEpisode(meta: meta, video: next, runtime: lengths.minutes(season: next.season, episode: next.episode)), newEpisode)
+                    return (UpcomingEpisode(meta: meta, video: next, runtime: lengths.minutes(season: next.season, episode: next.episode)), newEpisode, nil)
                 }
             }
-            for await (item, newEpisode) in group {
+            for await (item, newEpisode, failedId) in group {
                 if let item { found.append(item) }
                 if let newEpisode { fresh.append(newEpisode) }
+                if let failedId { unavailable.insert(failedId) }
             }
+        }
+        // Titles that couldn't be looked up keep what they had, and it's tried again soon.
+        if !unavailable.isEmpty {
+            found += upcoming.filter { unavailable.contains($0.meta.id) }
+            fresh += newEpisodes.filter { unavailable.contains($0.title.id) }
+            upcomingCheckedAt = Date().addingTimeInterval(-28 * 60)
         }
         upcoming = found.sorted { ($0.video.released ?? .distantFuture) < ($1.video.released ?? .distantFuture) }
         newEpisodes = fresh.filter { !hiddenNewEpisodes.contains($0.videoId) }
@@ -117,11 +125,18 @@ extension AppState {
                 }
             }
         }
-        recommendations = scores.values
+        let built = scores.values
             .filter { $0.score > 0 }
             .sorted { $0.score > $1.score }
             .prefix(48)
             .map { Recommendation(meta: $0.meta, because: $0.because) }
+        // Nothing at all usually means the lookups failed: keep the row, try again in 5 minutes.
+        if built.isEmpty, !recommendations.isEmpty {
+            recommendationsBuiltAt = Date().addingTimeInterval(-6 * 3600 + 300)
+            return
+        }
+        if built.isEmpty { recommendationsBuiltAt = Date().addingTimeInterval(-6 * 3600 + 300) }
+        recommendations = built
     }
 
     /// Rates a title and rebuilds recommendations around it.

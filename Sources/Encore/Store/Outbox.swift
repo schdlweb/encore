@@ -19,6 +19,18 @@ final class Outbox {
         }
     }
 
+    /// For reports that matter later (finished, marked watched). `work` returns false if
+    /// it should be tried again; a bad patch of network gets about 13 minutes to clear.
+    func sendReliably(_ work: @escaping @MainActor () async -> Bool) {
+        send {
+            for delay in [5.0, 30, 120, 600] {
+                if await work() { return }
+                try? await Task.sleep(for: .seconds(delay))
+            }
+            _ = await work()
+        }
+    }
+
     /// Waits for what's in flight, up to `timeout` seconds.
     func drain(timeout: Double) async {
         let deadline = Date().addingTimeInterval(timeout)

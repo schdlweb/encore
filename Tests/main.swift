@@ -189,6 +189,51 @@ section("CutoffRecovery") {
                 "playing on for a while starts over")
 }
 
+section("Connection problems and downloads") {
+    expect(StreamProbe.isConnectionProblem(.notConnectedToInternet), "offline")
+    expect(StreamProbe.isConnectionProblem(.timedOut), "timed out")
+    expect(StreamProbe.isConnectionProblem(.cannotConnectToHost), "refused")
+    expect(!StreamProbe.isConnectionProblem(.badServerResponse), "a bad answer is the server's problem")
+    expect(!StreamProbe.isConnectionProblem(.cancelled), "cancelled")
+    expect(formatSpeed(12_300_000).hasSuffix("/s"), "speed unit")
+    expect(formatSpeed(12_300_000).contains("12.3"), "speed value")
+    expectEqual(formatTimeLeft(20), "under a minute left", "short")
+    expectEqual(formatTimeLeft(5400), "1h 30m left", "long")
+
+    var item = DownloadManager.Item(name: "x")
+    expect(item.secondsLeft == nil, "no estimate without a speed")
+    item.total = 1000; item.received = 400; item.speed = 100
+    expectEqual(item.secondsLeft, 6, "time left")
+    item.state = .reconnecting
+    expect(item.isActive, "reconnecting is still active")
+    item.state = .failed("x")
+    expect(!item.isActive, "failed isn't")
+}
+
+section("withinTime") {
+    func run(_ body: @escaping @Sendable () async -> String) -> String {
+        let done = DispatchSemaphore(value: 0)
+        final class Box: @unchecked Sendable { var v = "" }
+        let box = Box()
+        Task.detached { box.v = await body(); done.signal() }
+        done.wait()
+        return box.v
+    }
+    expectEqual(run { await withinTime(2, fallback: "late") { "ready" } }, "ready", "a quick answer")
+    expectEqual(run { await withinTime(0.05, fallback: "late") {
+        try? await Task.sleep(for: .seconds(1)); return "ready"
+    } }, "late", "a slow one gets the fallback")
+}
+
+section("Saved title previews") {
+    let saved: SavedTitle = decode(#"{"id":"tt1","type":"series","name":"Show","poster":"http://p","releaseInfo":"2020"}"#)
+    let m = Meta.preview(of: saved)
+    expectEqual(m?.id, "tt1", "id")
+    expectEqual(m?.type, "series", "type")
+    expectEqual(m?.name, "Show", "name")
+    expectEqual(m?.poster, "http://p", "poster")
+}
+
 // MARK: Ids, languages, formatting
 
 section("JellyfinSync item ids") {
