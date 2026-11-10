@@ -103,7 +103,7 @@ final class MPVController {
     /// At the end of the data, already dealt with. mpv also pauses itself there
     /// (keep-open), which the next load undoes.
     @ObservationIgnored private var atEndOfData = false
-    var errorMessage: String?
+    var problem: PlaybackProblem?
 
     @ObservationIgnored nonisolated(unsafe) private var mpv: OpaquePointer?
     @ObservationIgnored nonisolated(unsafe) private var renderContext: OpaquePointer?
@@ -128,7 +128,7 @@ final class MPVController {
     init(settings: Settings) {
         defer { Self.current = self }
         guard let handle = mpv_create() else {
-            errorMessage = "Could not start the mpv engine."
+            problem = .engineFailed
             return
         }
         mpv = handle
@@ -191,7 +191,7 @@ final class MPVController {
 
         mpv_request_log_messages(handle, "error")
         guard mpv_initialize(handle) >= 0 else {
-            errorMessage = "Could not initialize the mpv engine."
+            problem = .engineFailed
             return
         }
 
@@ -238,7 +238,7 @@ final class MPVController {
             atEndOfData = false
             setPaused(false)
         }
-        errorMessage = nil
+        problem = nil
         buffering = true
         set("start", startAt.map { String(Int($0)) } ?? "none")
         // As a list, not one comma-joined string: a value with a comma in it (a cookie, an
@@ -437,7 +437,7 @@ final class MPVController {
     /// unreported and playback would sit on the last frame for good.
     func checkEndOfData() {
         // Once the error card is up, nothing more happens until the user picks something.
-        guard fileLoaded, errorMessage == nil else { return }
+        guard fileLoaded, problem == nil else { return }
         let stalled = updateStall()
         if getFlag("eof-reached") {
             guard !atEndOfData else { return }
@@ -678,7 +678,8 @@ final class MPVController {
         case .endFile(let reason, let error):
             if reason == MPV_END_FILE_REASON_ERROR {
                 let detail = lastError ?? String(cString: mpv_error_string(error))
-                errorMessage = "Playback failed: \(detail)"
+                NSLog("Encore: playback failed: %@", detail)
+                problem = .couldNotPlay
             }
         default: break
         }

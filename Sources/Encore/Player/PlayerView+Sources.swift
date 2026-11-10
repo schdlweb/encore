@@ -12,7 +12,7 @@ extension PlayerView {
         let resumeAt = position ?? (p.position > 5 ? p.position : request.startAt)
         triedURLs.insert(s.url ?? "")
         checkingStream = s
-        p.errorMessage = nil
+        p.problem = nil
         Task {
             let result = await StreamProbe.check(s)
             checkingStream = nil
@@ -34,11 +34,11 @@ extension PlayerView {
                 p.load(url: url.absoluteString, headers: s.requestHeaders, startAt: resumeAt,
                        audioLanguages: audioLanguages)
             case .failed(let reason):
-                if let onFailure { onFailure(false) } else { p.errorMessage = "That stream didn't work: \(reason)" }
+                if let onFailure { onFailure(false) } else { p.problem = .sourceFailed(reason) }
             case .unreachable(let reason):
                 // Says nothing about this source, so it stays available to try.
                 if s.url != stream.url { triedURLs.remove(s.url ?? "") }
-                if let onFailure { onFailure(true) } else { p.errorMessage = "That stream didn't work: \(reason)" }
+                if let onFailure { onFailure(true) } else { p.problem = .sourceFailed(reason) }
             }
         }
     }
@@ -58,7 +58,7 @@ extension PlayerView {
         case .tryAnotherStream:
             moveToAnotherStream(p, at: at)
         case .giveUp:
-            p.errorMessage = streamStoppedMessage(at)
+            p.problem = .streamStopped(at: at)
         }
     }
 
@@ -67,7 +67,7 @@ extension PlayerView {
         guard tries > 0, let alt = request.alternatives.first(where: {
             $0.isPlayable && !$0.looksLikeExtra && !request.matcher.isMismatch($0) && !triedURLs.contains($0.url ?? "")
         }) else {
-            p.errorMessage = streamStoppedMessage(at)
+            p.problem = .streamStopped(at: at)
             return
         }
         showToast("Lost the stream, trying another source")
@@ -99,12 +99,8 @@ extension PlayerView {
                 return
             }
             waitingForConnection = false
-            if !tornDown { p.errorMessage = streamStoppedMessage(at) }
+            if !tornDown { p.problem = .streamStopped(at: at) }
         }
-    }
-
-    private func streamStoppedMessage(_ at: Double) -> String {
-        "The stream stopped at \(formatClock(at)) and couldn't be resumed."
     }
 
     func loadSegments(_ p: MPVController) async {

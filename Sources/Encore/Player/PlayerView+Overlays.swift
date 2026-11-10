@@ -6,7 +6,7 @@ extension PlayerView {
 
     @ViewBuilder
     func overlays(_ p: MPVController) -> some View {
-        if (!p.fileLoaded || p.buffering || p.seeking || checkingStream != nil || waitingForConnection) && p.errorMessage == nil {
+        if (!p.fileLoaded || p.buffering || p.seeking || checkingStream != nil || waitingForConnection) && p.problem == nil {
             VStack(spacing: 14) {
                 ProgressView().controlSize(.large).tint(.white)
                 if waitingForConnection {
@@ -27,9 +27,12 @@ extension PlayerView {
             .allowsHitTesting(false)
         }
 
-        if let error = p.errorMessage {
-            errorCard(error)
+        ZStack {
+            if let problem = p.problem {
+                problemScreen(problem).transition(.opacity)
+            }
         }
+        .animation(.easeOut(duration: 0.25), value: p.problem)
 
         VStack(spacing: 0) {
             topBar
@@ -374,24 +377,46 @@ extension PlayerView {
         }
     }
 
-    func errorCard(_ message: String) -> some View {
-        VStack(spacing: 16) {
-            Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 34)).foregroundStyle(.orange)
-            Text(message).multilineTextAlignment(.center).frame(maxWidth: 520)
-            HStack {
-                if let p = player {
-                    Button("Try Again") { cutoff = nil; switchStream(to: stream, player: p) }
-                        .buttonStyle(PillButtonStyle(kind: .primary))
+    /// Shown over the last frame, darkened from the left so the words read and the
+    /// picture stays where you left it.
+    func problemScreen(_ problem: PlaybackProblem) -> some View {
+        ZStack(alignment: .leading) {
+            LinearGradient(colors: [.black.opacity(0.86), .black.opacity(0.4)], startPoint: .leading, endPoint: .trailing)
+                .contentShape(Rectangle())
+                .onTapGesture { poke() } // a click here doesn't reach the pause layer underneath
+            VStack(alignment: .leading, spacing: 10) {
+                Text(problem.title)
+                    .font(.system(size: 34, weight: .bold))
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(problem.detail)
+                    .font(.system(size: 16))
+                    .foregroundStyle(.white.opacity(0.72))
+                    .fixedSize(horizontal: false, vertical: true)
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 10) { problemButtons(problem) }
+                    VStack(alignment: .leading, spacing: 10) { problemButtons(problem) }
                 }
-                if let alt = nextUntriedStream, let p = player {
-                    Button("Try Next Stream") { switchStream(to: alt, player: p) }
-                        .buttonStyle(PillButtonStyle())
-                }
-                Button("Close") { close() }.buttonStyle(PillButtonStyle())
+                .padding(.top, 18)
             }
+            .frame(maxWidth: 520, alignment: .leading)
+            .padding(.horizontal, Theme.gutter)
         }
-        .padding(30)
-        .glass(cornerRadius: 22, tint: .black.opacity(0.5))
+    }
+
+    @ViewBuilder
+    private func problemButtons(_ problem: PlaybackProblem) -> some View {
+        if problem.canRetry, let p = player {
+            Button { cutoff = nil; switchStream(to: stream, player: p) } label: {
+                Label("Try again", systemImage: "arrow.clockwise")
+            }
+            .buttonStyle(PillButtonStyle(kind: .primary))
+            .keyboardShortcut(.defaultAction)
+        }
+        if let alt = nextUntriedStream, let p = player {
+            Button("Try another source") { switchStream(to: alt, player: p) }
+                .buttonStyle(PillButtonStyle())
+        }
+        Button("Close") { close() }.buttonStyle(PillButtonStyle())
     }
 
     func circleButton(_ icon: String, help: String, action: @escaping () -> Void) -> some View {

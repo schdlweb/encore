@@ -225,6 +225,13 @@ section("withinTime") {
     } }, "late", "a slow one gets the fallback")
 }
 
+section("Error screen wording") {
+    expectEqual(PlaybackProblem.streamStopped(at: 1041).title, "Playback stopped at 17:21", "says where")
+    expectEqual(PlaybackProblem.sourceFailed("HTTP 404").detail, "HTTP 404.", "reason becomes a sentence")
+    expectEqual(PlaybackProblem.sourceFailed("Timed out.").detail, "Timed out.", "no doubled period")
+    expect(!PlaybackProblem.engineFailed.canRetry, "retrying can't restart the engine")
+}
+
 section("Saved title previews") {
     let saved: SavedTitle = decode(#"{"id":"tt1","type":"series","name":"Show","poster":"http://p","releaseInfo":"2020"}"#)
     let m = Meta.preview(of: saved)

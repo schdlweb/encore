@@ -34,7 +34,7 @@ enum DebugHooks {
                                       p.position, p.duration, p.paused ? 1 : 0, p.fileLoaded ? 1 : 0, p.buffering ? 1 : 0, p.endedNaturally ? 1 : 0)
                     line += " hdrOut=\(p.hdrOutput) gamma=\(p.debugProperty("video-params/gamma") ?? "-") trc=\(p.debugProperty("target-trc") ?? "-") screenEDR=\(NSApp.windows.first { $0.isVisible && $0.title == "Player" }?.screen?.maximumPotentialExtendedDynamicRangeColorComponentValue ?? 0)"
                     line += " aid=\(p.selectedAudio.map(String.init) ?? "-") sid=\(p.selectedSubtitle.map(String.init) ?? "-")"
-                    if let e = p.errorMessage { line += " error=\(e)" }
+                    if let e = p.problem { line += " error=\(e.title)" }
                     let visible = NSApp.windows.contains { $0.isVisible && $0.occlusionState.contains(.visible) }
                     line += " windowVisible=\(visible) display-fps=\(p.debugProperty("display-fps") ?? "nil") decoder-drops=\(p.debugProperty("decoder-frame-drop-count") ?? "nil") delayed=\(p.debugProperty("vo-delayed-frame-count") ?? "nil")"
                     let np = MPNowPlayingInfoCenter.default()
@@ -297,6 +297,9 @@ enum DebugHooks {
         case "updatecheck":
             await app.updater.check(userInitiated: true)
             print("[update] current=\(app.updater.currentVersion) state=\(app.updater.state)"); fflush(stdout)
+        case "showproblem":
+            // The error screen, without having to break a stream first.
+            MPVController.current?.problem = .streamStopped(at: 1041)
         case "seekend":
             guard let p = MPVController.current, p.duration > 0 else { return }
             p.seekExact(to: p.duration - 40)
