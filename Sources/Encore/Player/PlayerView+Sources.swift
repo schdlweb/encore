@@ -7,9 +7,9 @@ extension PlayerView {
     }
 
     /// Checks a stream like the start of playback does, then switches to it in place.
-    func switchStream(to s: StreamItem, player p: MPVController) {
+    func switchStream(to s: StreamItem, player p: MPVController, resumeAt position: Double? = nil, onFailure: (() -> Void)? = nil) {
         guard checkingStream == nil else { return }
-        let resumeAt = p.position > 5 ? p.position : request.startAt
+        let resumeAt = position ?? (p.position > 5 ? p.position : request.startAt)
         triedURLs.insert(s.url ?? "")
         checkingStream = s
         p.errorMessage = nil
@@ -34,9 +34,44 @@ extension PlayerView {
                 p.load(url: url.absoluteString, headers: s.requestHeaders, startAt: resumeAt,
                        audioLanguages: audioLanguages)
             case .failed(let reason):
-                p.errorMessage = "That stream didn't work: \(reason)"
+                if let onFailure { onFailure() } else { p.errorMessage = "That stream didn't work: \(reason)" }
             }
         }
+    }
+
+    /// The stream stopped well before the end of the video. It isn't the end of the
+    /// episode: get a fresh link and carry on from the same spot, or failing that, another
+    /// source. Nothing is marked watched and the next episode doesn't start.
+    func recoverFromCutoff(_ p: MPVController) {
+        guard let at = p.cutOffAt, checkingStream == nil, !advancing else { return }
+        p.cutOffAt = nil
+        let attempt = CutoffRecovery.after(cutoff, position: at)
+        cutoff = attempt
+        switch attempt.action {
+        case .retrySameStream:
+            showToast("Lost the stream, reconnecting")
+            switchStream(to: stream, player: p, resumeAt: at) { moveToAnotherStream(p, at: at) }
+        case .tryAnotherStream:
+            moveToAnotherStream(p, at: at)
+        case .giveUp:
+            p.errorMessage = streamStoppedMessage(at)
+        }
+    }
+
+    /// Sources that check out as dead are skipped, up to `tries` of them.
+    private func moveToAnotherStream(_ p: MPVController, at: Double, tries: Int = 4) {
+        guard tries > 0, let alt = request.alternatives.first(where: {
+            $0.isPlayable && !$0.looksLikeExtra && !request.matcher.isMismatch($0) && !triedURLs.contains($0.url ?? "")
+        }) else {
+            p.errorMessage = streamStoppedMessage(at)
+            return
+        }
+        showToast("Lost the stream, trying another source")
+        switchStream(to: alt, player: p, resumeAt: at) { moveToAnotherStream(p, at: at, tries: tries - 1) }
+    }
+
+    private func streamStoppedMessage(_ at: Double) -> String {
+        "The stream stopped at \(formatClock(at)) and couldn't be resumed."
     }
 
     func loadSegments(_ p: MPVController) async {

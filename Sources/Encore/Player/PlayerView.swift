@@ -18,6 +18,41 @@ struct OncePerFile {
     var wrongFile = false
 }
 
+/// What to do when a stream stops well before the end of the video.
+struct CutoffRecovery: Equatable {
+    enum Action: Equatable { case retrySameStream, tryAnotherStream, giveUp }
+
+    var position: Double
+    var attempts: Int
+
+    /// Playing this far past the last cutoff counts as having recovered from it.
+    static let progressThatCounts: Double = 30
+
+    /// Stopping this close to the end is the end: containers often overstate the length
+    /// by a few seconds, and losing the last moments of the credits costs nothing.
+    static func isRealEnding(position: Double, duration: Double) -> Bool {
+        guard duration > 0 else { return true } // no known length to compare with
+        return duration - position <= max(15, duration * 0.02)
+    }
+
+    /// A stream that keeps playing for a while can be reconnected any number of times;
+    /// one that dies at the same spot gets one retry, then two other sources.
+    static func after(_ previous: CutoffRecovery?, position: Double) -> CutoffRecovery {
+        guard let previous, position - previous.position < progressThatCounts else {
+            return CutoffRecovery(position: position, attempts: 1)
+        }
+        return CutoffRecovery(position: previous.position, attempts: previous.attempts + 1)
+    }
+
+    var action: Action {
+        switch attempts {
+        case 1: .retrySameStream
+        case 2, 3: .tryAnotherStream
+        default: .giveUp
+        }
+    }
+}
+
 /// The player: the picture, its overlays and controls. The pieces live in extensions:
 /// `+Overlays` (what's drawn), `+Housekeeping` (the twice-a-second upkeep, progress and
 /// sync), `+Sources` (switching stream, segments, next episode), `+Previews` (scrub
@@ -51,6 +86,8 @@ struct PlayerView: View {
     @State var advancing = false
     /// What has been done for the file that's open; starts over when the source changes.
     @State var once = OncePerFile()
+    /// The last time the stream cut out before the end, and how often it has there.
+    @State var cutoff: CutoffRecovery?
     @State var currentURL: URL
     @State var checkingStream: StreamItem?
     @State var triedURLs: Set<String> = []

@@ -96,6 +96,13 @@ final class MPVController {
     var selectedSubtitle: Int?
     var fileLoaded = false { didSet { updateDisplayAwake() } }
     var endedNaturally = false { didSet { updateDisplayAwake() } }
+    /// Where the data ran out, when it ran out well before the end of the video (the
+    /// connection dropped, or a debrid link expired). mpv reports that exactly as it
+    /// reports a real ending. The player takes this and reconnects.
+    @ObservationIgnored var cutOffAt: Double?
+    /// At the end of the data, already dealt with. mpv also pauses itself there
+    /// (keep-open), which the next load undoes.
+    @ObservationIgnored private var atEndOfData = false
     var errorMessage: String?
 
     @ObservationIgnored nonisolated(unsafe) private var mpv: OpaquePointer?
@@ -193,7 +200,7 @@ final class MPVController {
             ("pause", MPV_FORMAT_FLAG), ("paused-for-cache", MPV_FORMAT_FLAG),
             ("seeking", MPV_FORMAT_FLAG), ("demuxer-cache-duration", MPV_FORMAT_DOUBLE),
             ("volume", MPV_FORMAT_DOUBLE), ("mute", MPV_FORMAT_FLAG), ("speed", MPV_FORMAT_DOUBLE),
-            ("eof-reached", MPV_FORMAT_FLAG), ("track-list", MPV_FORMAT_NONE),
+            ("track-list", MPV_FORMAT_NONE),
             ("aid", MPV_FORMAT_NONE), ("sid", MPV_FORMAT_NONE),
         ]
         for (name, format) in observed { mpv_observe_property(handle, 0, name, format) }
@@ -224,6 +231,12 @@ final class MPVController {
         if let audioLanguages { set("alang", audioLanguages) }
         fileLoaded = false
         endedNaturally = false
+        cutOffAt = nil
+        stalledChecks = 0
+        if atEndOfData {
+            atEndOfData = false
+            setPaused(false)
+        }
         errorMessage = nil
         buffering = true
         set("start", startAt.map { String(Int($0)) } ?? "none")
@@ -416,6 +429,47 @@ final class MPVController {
         }
     }
 
+    /// Asked twice a second rather than observed: mpv only reports a property when it
+    /// changes, so a reload that runs out of data again right away (true, then true) goes
+    /// unreported and playback would sit on the last frame for good.
+    func checkEndOfData() {
+        guard fileLoaded else { return }
+        let stalled = updateStall()
+        if getFlag("eof-reached") {
+            guard !atEndOfData else { return }
+            atEndOfData = true
+            reportStop(at: getDouble("time-pos") ?? position)
+        } else {
+            atEndOfData = false
+            // Resumed onto a dead link, mpv can sit there "playing" forever without ever
+            // reporting the end of the data.
+            if stalled, errorMessage == nil, cutOffAt == nil { reportStop(at: position) }
+        }
+    }
+
+    private func reportStop(at: Double) {
+        if CutoffRecovery.isRealEnding(position: at, duration: duration) { endedNaturally = true } else { cutOffAt = at }
+    }
+
+    /// Counted in checks, not clock time, so a Mac that slept doesn't look like a stall.
+    @ObservationIgnored private var stalledChecks = 0
+    @ObservationIgnored private var lastCheckedPosition = -1.0
+    /// 30 s at two checks a second, the same patience mpv's own network timeout has.
+    private static let checksBeforeStalled = 60
+
+    /// True once, when playback has gone 30 s without moving (a pause doesn't count).
+    private func updateStall() -> Bool {
+        guard !paused, position == lastCheckedPosition else {
+            lastCheckedPosition = position
+            stalledChecks = 0
+            return false
+        }
+        stalledChecks += 1
+        guard stalledChecks >= Self.checksBeforeStalled else { return false }
+        stalledChecks = 0
+        return true
+    }
+
     // MARK: Display sleep
 
     /// Held while a video is playing, so the screen doesn't dim or sleep mid-episode. (mpv
@@ -606,7 +660,6 @@ final class MPVController {
         case .flag("paused-for-cache", let v): buffering = v
         case .flag("seeking", let v): seeking = v
         case .flag("mute", let v): muted = v
-        case .flag("eof-reached", let v): if v && fileLoaded { endedNaturally = true }
         case .other("track-list"): refreshTracks()
         case .other("aid"): selectedAudio = getInt("aid")
         case .other("sid"): selectedSubtitle = getInt("sid")

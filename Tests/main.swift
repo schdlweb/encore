@@ -167,6 +167,28 @@ section("StreamRanking.order") {
     expectEqual(rank([]), [], "nothing in, nothing out")
 }
 
+section("CutoffRecovery") {
+    func ending(_ p: Double, _ d: Double) -> Bool { CutoffRecovery.isRealEnding(position: p, duration: d) }
+    expect(!ending(18, 90), "stopping at 18 of 90 s is a cutoff")
+    expect(!ending(700, 1440), "mid-episode is a cutoff")
+    expect(ending(1439, 1440), "the last second is the ending")
+    expect(ending(1420, 1440), "within the last 2% is the ending")
+    expect(!ending(1380, 1440), "a minute short of an episode's end is a cutoff")
+    expect(ending(7100, 7200), "a film's credits stretch")
+    expect(ending(12, 0), "no known duration can't be judged a cutoff")
+
+    let first = CutoffRecovery.after(nil, position: 600)
+    expectEqual(first.action, .retrySameStream, "the first cutoff retries the same stream")
+    let second = CutoffRecovery.after(first, position: 601)
+    expectEqual(second.action, .tryAnotherStream, "dying at the same spot moves on")
+    let third = CutoffRecovery.after(second, position: 602)
+    expectEqual(third.action, .tryAnotherStream, "a second other source")
+    expectEqual(CutoffRecovery.after(third, position: 603).action, .giveUp, "then it stops trying")
+    expectEqual(third.position, 600, "small gains don't reset the count")
+    expectEqual(CutoffRecovery.after(third, position: 900), CutoffRecovery(position: 900, attempts: 1),
+                "playing on for a while starts over")
+}
+
 // MARK: Ids, languages, formatting
 
 section("JellyfinSync item ids") {

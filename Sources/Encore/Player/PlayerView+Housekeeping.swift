@@ -20,6 +20,8 @@ extension PlayerView {
             preparePreviews(p)
             fitWindowOnce(p)
             autoSkip(p)
+            p.checkEndOfData()
+            recoverFromCutoff(p)
             finishIfEnded(p)
         }
     }
