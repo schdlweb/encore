@@ -168,6 +168,11 @@ final class MPVController {
             opt(script, "no")
         }
         opt("cache-pause-wait", "2")
+        // Audio goes through AVFoundation, which takes the surround mix as it is (7.1 stays
+        // 7.1 even on AirPods) and lets macOS apply Spatial Audio to it. Sending it to
+        // CoreAudio directly mixed it down to stereo first, and macOS offered no Spatial
+        // Audio at all. Passthrough and exclusive mode only exist in CoreAudio.
+        opt("ao", settings.passthrough || settings.exclusiveAudio ? "coreaudio" : "avfoundation,coreaudio")
         // Audio: the device decides the channel layout unless the user forces one.
         opt("audio-channels", settings.audioChannels.rawValue)
         opt("audio-spdif", settings.passthrough ? "ac3,eac3,dts,dts-hd,truehd" : "")
