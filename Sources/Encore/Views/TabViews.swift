@@ -21,6 +21,20 @@ struct SearchView: View {
                         .font(.system(size: 22, weight: .medium))
                         .focused($focused)
                     if searching { ProgressView().controlSize(.small) }
+                    if !query.isEmpty {
+                        Button {
+                            query = ""
+                            focused = true
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.system(size: 18))
+                                .foregroundStyle(Theme.textSecondary)
+                                .contentShape(Circle())
+                        }
+                        .buttonStyle(.plain)
+                        .help("Clear search")
+                        .accessibilityLabel("Clear search")
+                    }
                 }
                 .padding(.horizontal, 22)
                 .padding(.vertical, 16)
@@ -64,7 +78,8 @@ struct SearchView: View {
         .task(id: query) {
             let q = query.trimmingCharacters(in: .whitespaces)
             addonResults = []
-            guard q.count >= 2 else { sections = []; return }
+            // Cleared (or too short) mid-search: the cancelled search never turns its spinner off.
+            guard q.count >= 2 else { sections = []; searching = false; return }
             try? await Task.sleep(for: .milliseconds(250))
             guard !Task.isCancelled else { return }
             searching = true
