@@ -340,14 +340,28 @@ func daysUntil(_ date: Date) -> String {
     }
 }
 
-/// Stand-in for a missing episode still: the show's art blurred and dimmed, with the
-/// episode number, and "Coming soon" for one that hasn't aired.
+/// Stand-in for a missing episode still. An aired episode just shows the show's art; one
+/// that hasn't aired (or a show with no art) gets it blurred and dimmed, with the episode
+/// number, and "Coming soon" when upcoming.
 struct EpisodePlaceholder: View {
     let art: String?
     let label: String
     var upcoming = false
 
     var body: some View {
+        if !upcoming, art != nil {
+            ZStack {
+                Color.white.opacity(0.06)
+                RemoteImage(url: art, maxPixel: 640, showsEmpty: false)
+            }
+            .frame(width: 280, height: 158)
+            .clipped()
+        } else {
+            veiled
+        }
+    }
+
+    private var veiled: some View {
         ZStack {
             Color.white.opacity(0.06)
             RemoteImage(url: art, maxPixel: 400, showsEmpty: false)
