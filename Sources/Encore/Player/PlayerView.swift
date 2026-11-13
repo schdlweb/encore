@@ -140,7 +140,12 @@ struct PlayerView: View {
         return segments.first { $0.contains(p.position) }
     }
 
-    var nextVideo: Video? { app.nextVideo(in: request.meta, after: request.video) }
+    /// The episode after this one, once it has aired: an unaired one gets no Up Next card,
+    /// Next button or auto-advance. No air date counts as aired.
+    var nextVideo: Video? {
+        guard let next = app.nextVideo(in: request.meta, after: request.video) else { return nil }
+        return (next.released ?? .distantPast) <= .now ? next : nil
+    }
 
     var body: some View {
         ZStack {
