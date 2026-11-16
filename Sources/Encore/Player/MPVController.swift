@@ -89,6 +89,8 @@ final class MPVController {
     var cacheSeconds: Double = 0
     var volume: Double = 100
     var muted = false
+    /// Tags the latest ao-volume request, so only its refusal triggers the fallback.
+    @ObservationIgnored private var levelRequest: UInt64 = 0
     var speed: Double = 1
     var audioTracks: [MediaTrack] = []
     var subtitleTracks: [MediaTrack] = []
@@ -204,7 +206,7 @@ final class MPVController {
             ("time-pos", MPV_FORMAT_DOUBLE), ("duration", MPV_FORMAT_DOUBLE),
             ("pause", MPV_FORMAT_FLAG), ("paused-for-cache", MPV_FORMAT_FLAG),
             ("seeking", MPV_FORMAT_FLAG), ("demuxer-cache-duration", MPV_FORMAT_DOUBLE),
-            ("volume", MPV_FORMAT_DOUBLE), ("mute", MPV_FORMAT_FLAG), ("speed", MPV_FORMAT_DOUBLE),
+            ("speed", MPV_FORMAT_DOUBLE),
             ("track-list", MPV_FORMAT_NONE),
             ("aid", MPV_FORMAT_NONE), ("sid", MPV_FORMAT_NONE),
         ]
@@ -270,13 +272,36 @@ final class MPVController {
     /// so it's as quick as a keyframe seek).
     func seekExact(to seconds: Double) { commandAsync(["seek", String(seconds), "absolute+exact"]) }
     func seek(by seconds: Double) { commandAsync(["seek", String(seconds), "relative"]) }
-    // Like pause: shown at once, confirmed by mpv's own report a moment later.
     func setVolume(_ v: Double) {
         volume = Double(Int(min(max(v, 0), 150)))
-        setAsync("volume", String(Int(volume)))
+        applyLevel()
     }
     func toggleMute() {
         muted.toggle()
+        applyLevel()
+    }
+
+    /// Volume and mute go to the audio output itself (`ao-volume`), which acts at once.
+    /// mpv's own `volume` is applied before the output's buffer, and AVFoundation keeps a
+    /// lot queued, so a change there was only heard after a noticeable delay. mpv's
+    /// `volume` now only carries the boost above 100%. Where the output has no volume
+    /// control (passthrough, exclusive mode, no audio yet) it all falls back to mpv's.
+    /// `volume` and `muted` are ours alone; mpv's reports aren't read back, so a late
+    /// report can't pull the slider back while it's being dragged.
+    private func applyLevel() {
+        levelRequest &+= 1
+        // ao-volume is linear gain; mpv's volume is cubic. Matching it keeps the slider's feel.
+        let gain = min(volume, 100) / 100
+        setAsync("ao-volume", String(gain * gain * gain * 100), reply: levelRequest)
+        setAsync("ao-mute", muted ? "yes" : "no")
+        setAsync("volume", String(Int(max(volume, 100))))
+        setAsync("mute", "no")
+    }
+
+    /// The output refused ao-volume: let mpv's own volume do all of it.
+    private func levelFallback(request: UInt64) {
+        guard request == levelRequest else { return }
+        setAsync("volume", String(Int(volume)))
         setAsync("mute", muted ? "yes" : "no")
     }
     func setSpeed(_ s: Double) {
@@ -549,11 +574,11 @@ final class MPVController {
         }
     }
 
-    private func setAsync(_ name: String, _ value: String) {
+    private func setAsync(_ name: String, _ value: String, reply: UInt64 = 0) {
         guard let mpv else { return }
         value.withCString { v in
             var p: UnsafePointer<CChar>? = v
-            _ = mpv_set_property_async(mpv, 0, name, MPV_FORMAT_STRING, &p)
+            _ = mpv_set_property_async(mpv, reply, name, MPV_FORMAT_STRING, &p)
         }
     }
 
@@ -601,6 +626,8 @@ final class MPVController {
         case other(String)
         case fileLoaded
         case endFile(reason: mpv_end_file_reason, error: Int32)
+        case audioReconfig
+        case levelRefused(UInt64)
     }
 
     nonisolated private func drainEvents() {
@@ -623,6 +650,10 @@ final class MPVController {
             case MPV_EVENT_END_FILE:
                 let f = e.data.assumingMemoryBound(to: mpv_event_end_file.self).pointee
                 change = .endFile(reason: f.reason, error: f.error)
+            case MPV_EVENT_AUDIO_RECONFIG:
+                change = .audioReconfig
+            case MPV_EVENT_SET_PROPERTY_REPLY where e.error < 0 && e.reply_userdata != 0:
+                change = .levelRefused(e.reply_userdata)
             case MPV_EVENT_LOG_MESSAGE:
                 let m = e.data.assumingMemoryBound(to: mpv_event_log_message.self).pointee
                 lastError = String(cString: m.text).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -667,12 +698,13 @@ final class MPVController {
         case .double("time-pos", let v): if abs(v - position) >= 0.25 { position = v }
         case .double("duration", let v): duration = v
         case .double("demuxer-cache-duration", let v): if abs(v - cacheSeconds) >= 1 { cacheSeconds = v }
-        case .double("volume", let v): volume = v
         case .double("speed", let v): speed = v
         case .flag("pause", let v): paused = v
         case .flag("paused-for-cache", let v): buffering = v
         case .flag("seeking", let v): seeking = v
-        case .flag("mute", let v): muted = v
+        // A new audio output starts at full volume.
+        case .audioReconfig: applyLevel()
+        case .levelRefused(let request): levelFallback(request: request)
         case .other("track-list"): refreshTracks()
         case .other("aid"): selectedAudio = getInt("aid")
         case .other("sid"): selectedSubtitle = getInt("sid")
