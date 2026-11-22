@@ -387,6 +387,17 @@ struct CatalogGridView: View {
                     }
                 }
                 .padding(.horizontal, Theme.gutter)
+                if case .failed(let message) = row.state {
+                    HStack(spacing: 12) {
+                        Label(message, systemImage: "exclamationmark.triangle")
+                            .font(.system(size: 13))
+                            .foregroundStyle(Theme.textTertiary)
+                        Button("Retry") { row.retry(app.client) }
+                            .buttonStyle(PillButtonStyle())
+                            .controlSize(.small)
+                    }
+                    .padding(.horizontal, Theme.gutter)
+                }
                 if row.state == .loading {
                     ProgressView().frame(maxWidth: .infinity).padding()
                 }

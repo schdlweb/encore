@@ -3,12 +3,28 @@ import Foundation
 enum AddonError: LocalizedError {
     case badURL(String)
     case http(Int, String)
+    /// An addon behind AIOStreams failed (timed out, rate limited, down).
+    case upstream(addon: String, message: String?)
 
     var errorDescription: String? {
         switch self {
         case .badURL(let s): "That doesn't look like an addon manifest URL: \(s)"
         case .http(let code, let path): "The addon returned HTTP \(code) for \(path)"
+        case .upstream(let addon, let message):
+            message.map { "\(addon) didn't respond: \($0)" } ?? "\(addon) didn't respond"
         }
+    }
+}
+
+extension Meta {
+    /// AIOStreams answers for an addon that failed with a stand-in item named
+    /// "[❌] <addon>", the error in its description, instead of an error. It isn't a title.
+    var upstreamError: AddonError? {
+        guard name.hasPrefix("[❌]") else { return nil }
+        let addon = name.dropFirst("[❌]".count).trimmingCharacters(in: .whitespaces)
+        let message = description?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return .upstream(addon: addon.isEmpty ? "The addon" : addon,
+                         message: message?.isEmpty == false ? message : nil)
     }
 }
 
@@ -64,11 +80,20 @@ struct AddonClient: Sendable {
         if !extras.isEmpty {
             path += "/" + extras.map { "\(Self.enc($0.0))=\(Self.enc($0.1))" }.joined(separator: "&")
         }
-        return try await get(path + ".json", as: CatalogResponse.self).metas
+        return try await Self.realTitles(get(path + ".json", as: CatalogResponse.self).metas)
+    }
+
+    /// Drops AIOStreams' error stand-ins; when that leaves nothing, the catalog failed.
+    static func realTitles(_ metas: [Meta]) throws -> [Meta] {
+        let real = metas.filter { $0.upstreamError == nil }
+        if real.isEmpty, let error = metas.lazy.compactMap(\.upstreamError).first { throw error }
+        return real
     }
 
     func meta(type: String, id: String) async throws -> Meta? {
-        try await get("/meta/\(Self.enc(type))/\(Self.enc(id)).json", as: MetaResponse.self).meta
+        let meta = try await get("/meta/\(Self.enc(type))/\(Self.enc(id)).json", as: MetaResponse.self).meta
+        if let error = meta?.upstreamError { throw error }
+        return meta
     }
 
     func streams(type: String, videoId: String) async throws -> [StreamItem] {

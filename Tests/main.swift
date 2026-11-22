@@ -280,6 +280,18 @@ section("AddonClient manifest URLs") {
     expect((try? AddonClient(manifestURL: "not a url")) == nil, "junk is refused")
 }
 
+section("AIOStreams error stand-ins") {
+    var stub = Meta(id: "x", type: "movie", name: "[❌] AIOMetadata")
+    stub.description = "429 - Too Many Requests"
+    let fansub = Meta(id: "y", type: "other", name: "[DragsterPS] Kaguya-sama S01 [720p]")
+    let real = Meta(id: "z", type: "movie", name: "Dune")
+    expectEqual(stub.upstreamError?.errorDescription, "AIOMetadata didn't respond: 429 - Too Many Requests", "names the addon and the error")
+    expect(fansub.upstreamError == nil, "a fansub group in brackets is a real title")
+    expectEqual((try? AddonClient.realTitles([real, stub]))?.map(\.id), ["z"], "stand-ins are dropped from real results")
+    expect((try? AddonClient.realTitles([stub])) == nil, "only a stand-in: the catalog failed")
+    expectEqual((try? AddonClient.realTitles([]))?.count, 0, "empty stays empty")
+}
+
 // MARK: Disk
 
 struct Sample: Codable, Equatable, Sendable {
