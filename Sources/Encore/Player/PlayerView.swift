@@ -226,7 +226,8 @@ struct PlayerView: View {
         let skip = Double(app.settings.skipInterval)
         nowPlaying = NowPlaying(
             title: request.title, subtitle: request.video.map { _ in request.subtitle ?? "" },
-            artworkURL: request.video?.thumbnail ?? request.meta.background ?? request.meta.poster,
+            // An episode shows its own still, a movie its poster; the show's art if those fail.
+            artworkURLs: [request.video?.thumbnail, request.meta.poster, request.meta.background],
             skipInterval: skip,
             actions: .init(
                 togglePause: { p.togglePause(); poke() },

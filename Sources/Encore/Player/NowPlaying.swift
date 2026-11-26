@@ -16,8 +16,11 @@ final class NowPlaying {
 
     private var targets: [(MPRemoteCommand, Any)] = []
     private var info: [String: Any] = [:]
+    /// Whether the info has gone to macOS yet (it waits briefly for the artwork).
+    private var published = false
 
-    init(title: String, subtitle: String?, artworkURL: String?, skipInterval: Double, actions: Actions) {
+    /// `artworkURLs`: tried in order until one loads (the episode's still, then the show's art).
+    init(title: String, subtitle: String?, artworkURLs: [String?], skipInterval: Double, actions: Actions) {
         let center = MPRemoteCommandCenter.shared()
         func on(_ command: MPRemoteCommand, _ handler: @escaping (MPRemoteCommandEvent) -> MPRemoteCommandHandlerStatus) {
             command.isEnabled = true
@@ -44,15 +47,35 @@ final class NowPlaying {
         info[MPMediaItemPropertyTitle] = subtitle.map { "\(title): \($0)" } ?? title
         info[MPMediaItemPropertyArtist] = "Encore"
         info[MPNowPlayingInfoPropertyMediaType] = MPNowPlayingInfoMediaType.video.rawValue
-        MPNowPlayingInfoCenter.default().nowPlayingInfo = info
 
-        if let artworkURL, let url = URL(string: artworkURL) {
-            Task {
-                guard let image = await ImagePipeline.shared.image(url, maxPixel: 600) else { return }
-                info[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
-                MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+        // macOS kept showing the app icon when the artwork arrived after the rest of the
+        // info, so the first publish waits for it (up to 2 s; it's usually cached already).
+        let urls = artworkURLs.compactMap { $0.flatMap(URL.init(string:)) }
+        Task {
+            for url in urls {
+                guard let image = await ImagePipeline.shared.image(url, maxPixel: 600) else { continue }
+                info[MPMediaItemPropertyArtwork] = Self.artwork(image)
+                break
             }
+            publish()
         }
+        Task {
+            try? await Task.sleep(for: .seconds(2))
+            if !published { publish() }
+        }
+    }
+
+    /// Made outside the main actor: macOS asks for the image from a background thread.
+    nonisolated private static func artwork(_ image: NSImage) -> MPMediaItemArtwork {
+        MPMediaItemArtwork(boundsSize: image.size) { _ in image }
+    }
+
+    private func publish() {
+        guard !targets.isEmpty else { return } // ended already
+        published = true
+        MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+        let paused = (info[MPNowPlayingInfoPropertyPlaybackRate] as? Double) == 0
+        MPNowPlayingInfoCenter.default().playbackState = paused ? .paused : .playing
     }
 
     /// Call when playback state changes and every few seconds; macOS extrapolates
@@ -62,6 +85,7 @@ final class NowPlaying {
         info[MPMediaItemPropertyPlaybackDuration] = duration
         info[MPNowPlayingInfoPropertyPlaybackRate] = paused ? 0 : speed
         info[MPNowPlayingInfoPropertyDefaultPlaybackRate] = 1.0
+        guard published else { return }
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
         MPNowPlayingInfoCenter.default().playbackState = paused ? .paused : .playing
     }
